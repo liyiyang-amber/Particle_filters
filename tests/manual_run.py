@@ -298,7 +298,7 @@ def run_all_filter_tests(verbose: bool = False) -> Tuple[bool, int, int]:
 def run_integration_tests(verbose: bool = False) -> Tuple[bool, int, int]:
     """Run integration tests"""
     test_paths = ["tests/integration_tests/"]
-    return run_pytest(test_paths, "Integration Tests (Including MAT Filter Integration)", verbose)
+    return run_pytest(test_paths, "Integration Tests", verbose)
 
 
 def run_mat_filter_integration_tests(verbose: bool = False) -> Tuple[bool, int, int]:
@@ -386,25 +386,25 @@ def run_all_tests(verbose: bool = False) -> Tuple[bool, int, int]:
     all_failed.append(failed)
     
     # Phase 9: Integration tests
-    print_section("PHASE 8: Integration Tests")
+    print_section("PHASE 9: Integration Tests")
     success, passed, failed = run_integration_tests(verbose)
     all_passed.append(passed)
     all_failed.append(failed)
     
-    # Phase 9: MAT Filter Integration (EKF, UKF, EDH, LEDH)
-    print_section("PHASE 9: MAT Filter Integration (EKF + UKF + EDH + LEDH)")
+    # Phase 10: MAT Filter Integration (EKF, UKF, EDH, LEDH)
+    print_section("PHASE 10: MAT Filter Integration (EKF + UKF + EDH + LEDH)")
     success, passed, failed = run_mat_filter_integration_tests(verbose)
     all_passed.append(passed)
     all_failed.append(failed)
     
-    # Phase 10: SNLG Filter Integration (KF, UKF, EKF, EDH, LEDH)
-    print_section("PHASE 10: SNLG Filter Integration (KF + UKF + EKF + EDH + LEDH)")
+    # Phase 11: SNLG Filter Integration (KF, UKF, EKF, EDH, LEDH)
+    print_section("PHASE 11: SNLG Filter Integration (KF + UKF + EKF + EDH + LEDH)")
     success, passed, failed = run_snlg_filter_integration_tests(verbose)
     all_passed.append(passed)
     all_failed.append(failed)
     
-    # Phase 11: SNLG Skew-t Filter Integration (EKF, UKF, PF, EDH, LEDH)
-    print_section("PHASE 11: SNLG Skew-t Filter Integration (EKF + UKF + PF + EDH + LEDH)")
+    # Phase 12: SNLG Skew-t Filter Integration (EKF, UKF, PF, EDH, LEDH)
+    print_section("PHASE 12: SNLG Skew-t Filter Integration (EKF + UKF + PF + EDH + LEDH)")
     success, passed, failed = run_sn_skewt_filter_integration_tests(verbose)
     all_passed.append(passed)
     all_failed.append(failed)
