@@ -1,36 +1,86 @@
 # From Classical Filters to Particle Flows
 
+## Quickstart
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+
+pytest
+```
+
+Recommended starting notebook: `notebooks/EKF_UKF_PF_comparison.ipynb`.
+
 ## 1. Abstract
 
-This repository provides a unified codebase illustrating the evolution of filtering methods: from classical Kalman filters (KF, EKF, UKF), to particle filters (PF), deterministic particle flows (EDH, LEDH), and kernel-embedded flows (KPF). The motivation is to address the limitations of classical filters under strong nonlinearity and non-Gaussianity, the degeneracy of particle filters, and to showcase how particle flows provide continuous-time Bayes updates. The codebase includes implementations, benchmarks, visualizations, and stability diagnostics for a wide range of state-space models (SSMs).
+This repository provides a unified codebase illustrating the evolution of filtering methods: from classical Kalman filters (KF, EKF, UKF), to particle filters (PF), and further to particle-flow-based methods including deterministic flows (EDH/LEDH), kernel-embedded flows (KPF), and stochastic particle flow (SPF) variants. We also include differentiable particle filter (DPF) resampling strategies (soft, optimal transport, and learned/RNN-based). The motivation is to address the limitations of classical filters under strong nonlinearity and non-Gaussianity, the degeneracy of particle filters, and to showcase how particle flows provide continuous-time Bayes updates. The codebase includes implementations, benchmarks, visualizations, and stability diagnostics for a wide range of state-space models (SSMs).
+
+The repository provides:
+- Implementations in `models/` and simulators in `simulator/`
+- Reproducible experiments and visualizations in `notebooks/`
 
 
 ## 2. Repository Structure
 
 ```
-/models/         # Filtering algorithms (KF, EKF, UKF, PF, EDH, LEDH, KPF)
-/simulator/      # Synthetic data generators for SSMs and experiment data
-/notebooks/      # Interactive demos and experiments
-/tests/          # Unit and integration tests
+/models/                 # Filter implementations (KF,EKF,UKF,PF,EDH,LEDH,KPF,SPF,DPF)
+/simulator/              # Synthetic data generators for SSMs and experiment data
+/notebooks/              # Reproducible experiments, comparisons, and figure generation
+/tests/                  # Unit + integration tests
+README.md                # Project overview (this file)
 ```
 
-**File Reference Guide:**
-For further details, please refer to the 'Report'.
+## Where to start (recommended notebooks)
 
+| Goal | Notebook |
+|---|---|
+| Kalman filter check (LGSSM) | `notebooks/kalman_filter_LGSSM.ipynb` |
+| EKF vs UKF vs PF (core comparison) | `notebooks/EKF_UKF_PF_comparison.ipynb` |
+| EDH/LEDH/KPF on nonlinear SSMs | `notebooks/EDH_LEDH_KPF_NLNGSSM.ipynb` |
+| Differentiable PF (DPF) resampling comparisons | `notebooks/DPF_resampling_comparison_nonlinear.ipynb` |
+
+## Common issues
+
+- **TensorFlow install:** DPF modules require TensorFlow (pinned in `requirements.txt`). If installation fails, confirm you’re using the intended Python version and an up-to-date pip. On some systems, TensorFlow wheels can be platform-specific.
+- **Notebooks can’t import `models/` or `simulator/`:** Ensure the notebook kernel is the same environment where you installed `requirements.txt`, and open/run notebooks from the repo root so imports resolve.
 
 ## 3. Installation & Dependencies
 
-- Python 3.11.13 
-- numpy==2.3.3
-- scipy==1.16.2
-- matplotlib==3.10.7
-- pandas==2.3.3
-- pytest==8.4.2
+### 3.1 Python
+
+- Tested with Python 3.11.13 (should work on Python 3.10+).
+
+### 3.2 Install
+
+This repo uses a simple pip-based setup via `requirements.txt`.
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+### 3.3 Quick sanity check
+
+Run the test suite:
+
+```bash
+pytest
+```
+
+### 3.4 Main dependencies
+
+Pinned versions live in `requirements.txt`. Key packages include NumPy/SciPy, Matplotlib, Pandas, and PyTest.
 
 
 ## 4. Linear–Gaussian SSM & Kalman Filter
 
-### 4.1 Model Description
+### 4.1 Model 
 
 The Linear Gaussian State Space Model (LGSSM) is defined as:
 
@@ -54,6 +104,10 @@ where:
 **Parameters for synthetic data generation:**
 - State dimension: 2
 - Observation dimension: 2
+- $A = \begin{bmatrix} 0.9 & 0.5 \\ 0.0 & 0.7 \end{bmatrix}$
+- $B = \operatorname{diag}(\sqrt{0.05}, \sqrt{0.02})$
+- $C = \begin{bmatrix} 1.0 & 0.0 \\ 0.0 & 1.0 \end{bmatrix}$
+- $D = \operatorname{diag}(\sqrt{0.10}, \sqrt{0.10})$
 - Initial state covariance: $\Sigma = I$
 - Time steps: 1000
 - Random seed: 42
@@ -74,7 +128,7 @@ where:
 
 ## 5. Nonlinear / Non-Gaussian SSM
 
-### 5.1 Model Construction
+### 5.1 Model 
 
 A key example is the 1-D stochastic volatility (SV) model:
 
@@ -100,7 +154,7 @@ where:
 
 This model is nonlinear and non-Gaussian in the observation equation, making it a strong test for EKF, UKF, and PF methods.
 
-### 5.2 EKF & UKF Implementation
+### 5.2 Methods
 - EKF: Linearizes the nonlinear functions around current estimate
 - UKF: Uses sigma points to approximate nonlinear transformations
 - Both methods may struggle with the non-Gaussian, heavy-tailed observation noise
@@ -127,7 +181,10 @@ This model is nonlinear and non-Gaussian in the observation equation, making it 
 
 ### 6.1 EDH Flow
 - The Exact Daum-Huang (EDH) flow implements a deterministic continuous-time Bayes update for particles.
-- The flow is defined by an ODE: $\frac{dx}{d\lambda} = K(x, \lambda) \nabla_x \log p(y|x),$
+- The flow is defined by an ODE:
+  $$
+  \frac{dx}{d\lambda} = K(x, \lambda) \nabla_x \log p(y|x)
+  $$
   where $K(x, \lambda)$ is a gain matrix, typically from linearization.
 - In EDH, the gain is computed globally from the linearized model at the ensemble mean.
 - Jacobian determinant and condition number are monitored for stability.
@@ -179,24 +236,60 @@ This model is nonlinear and non-Gaussian in the observation equation, making it 
     - Particle movement in RKHS
 
 
-## 8. Stability Diagnostics
+## 8. Stochastic Particle Flow (SPF)
 
-Comprehensive stability diagnostics and comparison experiments are performed for EDH, LEDH, and KPF filters in the notebook:
+## 8.1 Motivation
+SPF performs the measurement update by tempering the likelihood over pseudo-time $\lambda\in[0,1]$, and adds diffusion to reduce particle collapse.
 
-- **Metrics Tracked:**
-    - Particle displacement ($\|\Delta \eta\|$)
-    - Condition number of flow matrices (EDH/LEDH)
-    - Pseudo-time step sizes ($\theta$) for KPF
-    - Weight coefficient of variation (CV)
-    - Minimum effective sample size (ESS)
-    - Number of resampling events
-    - RMSE and runtime
+Tempered posterior:
+$$
+\pi_{\lambda}(x) \propto p(y\mid x)^{\beta(\lambda)}\,p(x),\qquad \beta(0)=0,\;\beta(1)=1.
+$$
+Schedules used in the repo: linear $\beta(\lambda)=\lambda$ and a numerically-solved “optimal” $\beta^*(\lambda)$ (bisection/shooting).
+
+Local linear–Gaussian model used in the SPF:
+$$
+y = Hx + v,\qquad v\sim\mathcal{N}(0, R),\qquad x\sim\mathcal{N}(m_0, P_0).
+$$
+
+Stochastic flow (integrated by Euler–Maruyama):
+$$
+dX_{\lambda} = a(X_{\lambda},\lambda)\,d\lambda + B(X_{\lambda},\lambda)\,dW_{\lambda}.
+$$
+
+### 8.2 Experiments and outputs
+Reproductions compare SPF (optimal $\beta^*$) vs SPF (linear $\beta$) vs SIR PF.
 
 
-## 9. Reproducible Experiments
 
-- Run experiment scripts in `/notebooks/`
-- Control randomness with seeds
+## 9. Differentiable Particle Filters (DPF) and Resampling Variants
+
+The common goal is to map a weighted particle set $\{(x^{(i)}, w^{(i)})\}_{i=1}^N$ to an approximately unweighted set $\{\tilde{x}^{(j)}\}_{j=1}^N$ smoothly (and in some cases differentiably), improving stability in nonlinear/non-Gaussian settings.
+
+### 9.1 Soft resampling (Gumbel–Softmax mixture)
+
+Soft resampling uses a mixture distribution
+$$
+q_i = (1-\alpha) w_i + \alpha\,\frac{1}{N},\qquad \alpha\in[0,1],
+$$
+and draws (soft) ancestor assignments using a Gumbel–Softmax reparameterization. This yields a differentiable approximation to categorical resampling and helps avoid hard particle impoverishment.
+
+### 9.2 Optimal-transport (OT) resampling (Sinkhorn + barycentric projection)
+
+OT resampling computes an entropic-regularized transport plan $P\in\mathbb{R}^{N\times N}$ between the weighted empirical measure and a uniform target:
+$$
+a=w,\qquad b=\tfrac{1}{N}\mathbf{1},\qquad C_{ij}=\|x^{(i)}-x^{(j)}\|^2.
+$$
+Using Sinkhorn iterations, it forms $P$ (approximately satisfying $P\mathbf{1}=a$ and $P^T\mathbf{1}=b$), then applies the **barycentric projection**:
+$$
+    	ilde{x}^{(j)} = \frac{1}{b_j}\sum_i P_{ij} x^{(i)}\;\;\;\text{(so for }b_j=1/N:\; \tilde{x}^{(j)}=N\sum_i P_{ij}x^{(i)}\text{)}.
+$$
+This produces smoothly moved particles with uniform weights and typically reduces Monte Carlo noise relative to discrete resampling.
+
+### 9.3 Learned / RNN-based resampling
+
+An RNN (LSTM/GRU) can be used to output assignment probabilities over old particles given particle states and weights, enabling data-driven resampling policies. The implementation supports a baseline mode (no training) and a learned mode.
+
 
 ## 10. References
 
@@ -210,3 +303,14 @@ Comprehensive stability diagnostics and comparison experiments are performed for
 - Li, Y., & Coates, M. (2017). Particle Filtering With Invertible Particle Flow. *IEEE Transactions on Signal Processing*, 65(15), 4102-4116. https://doi.org/10.1109/TSP.2017.2703684
 - Dhayalkar, S. R. (2025). Particle Filter Made Simple: A Step-by-Step Beginner-friendly Guide. arXiv:2511.01281. https://arxiv.org/abs/2511.01281
 - Hu, C.-C., & van Leeuwen, P. J. (2021). A particle flow filter for high-dimensional system applications. *Quarterly Journal of the Royal Meteorological Society*, 147(737), 2352-2374. https://doi.org/10.1002/qj.4028
+- Dai, L., & Daum, F. (2021). A New Parameterized Family of Stochastic Particle Flow Filters. arXiv:2103.09676. https://arxiv.org/abs/2103.09676
+- Dai, L., & Daum, F. E. (2021). Stiffness Mitigation in Stochastic Particle Flow Filters. arXiv:2107.04672. https://arxiv.org/abs/2107.04672
+- Corenflos, A., Thornton, J., Deligiannidis, G., & Doucet, A. (2021). Differentiable Particle Filtering via Entropy-Regularized Optimal Transport. *Proceedings of the 38th International Conference on Machine Learning (ICML)*, PMLR 139, 2100–2111. https://proceedings.mlr.press/v139/corenflos21a.html
+- Chen, X., & Li, Y. (2025). An overview of differentiable particle filters for data-adaptive sequential Bayesian inference. *Foundations of Data Science*, 7(4), 915–943. https://doi.org/10.3934/fods.2023014
+- Jonschkowski, R., Rastogi, D., & Brock, O. (2018). Differentiable Particle Filters: End-to-End Learning with Algorithmic Priors. arXiv:1805.11122. https://arxiv.org/abs/1805.11122
+- Ma, X., Karkus, P., & Hsu, D. (2020). Particle Filter Recurrent Neural Networks. *AAAI Conference on Artificial Intelligence*, 34(04), 5101–5108. https://doi.org/10.1609/aaai.v34i04.5952
+
+
+
+
+
