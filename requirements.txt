@@ -1,0 +1,11 @@
+# Core scientific stack
+numpy==2.3.3
+scipy==1.16.2
+matplotlib==3.10.7
+pandas==2.3.3
+
+# Testing
+pytest==8.4.2
+
+# DPF (RNN/OT/soft) components
+tensorflow==2.20.0
