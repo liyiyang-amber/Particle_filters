@@ -268,8 +268,8 @@ and draws (soft) ancestor assignments using a Gumbel–Softmax reparameterizatio
 
 OT resampling computes an entropic-regularized transport plan $P\in\mathbb{R}^{N\times N}$ between the weighted empirical measure and a uniform target:
 $a=w,\quad b=\tfrac{1}{N}\mathbf{1},\quad C_{ij}=\|x^{(i)}-x^{(j)}\|^2.$
-Using Sinkhorn iterations, it forms $P$ (approximately satisfying $P\mathbf{1}=a$ and $P^T\mathbf{1}=b$), then applies the **barycentric projection**:
-$\tilde{x}^{(j)} = \frac{1}{b_j}\sum_i P_{ij} x^{(i)};\text{(so for }b_j=1/N:\; \tilde{x}^{(j)}=N\sum_i P_{ij}x^{(i)}\text{)}.$
+Using Sinkhorn iterations, it forms $P$ (approximately satisfying $P\mathbf{1}=a$ and $P^T\mathbf{1}=b$), then applies the barycentric projection:
+$\tilde{x}^{(j)} = \frac{1}{b_j}\sum_i P_{ij} x^{(i)}\text{(so for }b_j=1/N, \tilde{x}^{(j)}=N\sum_i P_{ij}x^{(i)}\text{)}.$
 This produces smoothly moved particles with uniform weights and typically reduces Monte Carlo noise relative to discrete resampling.
 
 ### 9.3 Learned / RNN-based resampling
