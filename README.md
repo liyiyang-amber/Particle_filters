@@ -256,7 +256,7 @@ Reproductions compare SPF (optimal $\beta^*$) vs SPF (linear $\beta$) vs SIR PF.
 
 ## 9. Differentiable Particle Filters (DPF) and Resampling Variants
 
-The common goal is to map a weighted particle set $\{(x^{(i)}, w^{(i)})\}_{i=1}^{N}$ to an approximately unweighted set $\{\tilde{x}^{(j)}\}_{j=1}^{N}$ smoothly (and in some cases differentiably), improving stability in nonlinear/non-Gaussian settings.
+The common goal is to map a weighted particle set $`\{(x^{(i)}, w^{(i)})\}_{i=1}^{N}`$ to an approximately unweighted set $`\{\tilde{x}^{(j)}\}_{j=1}^{N}`$ smoothly (and in some cases differentiably), improving stability in nonlinear/non-Gaussian settings.
 
 ### 9.1 Soft resampling (Gumbel–Softmax mixture)
 
