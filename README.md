@@ -104,9 +104,9 @@ where:
 **Parameters for synthetic data generation:**
 - State dimension: 2
 - Observation dimension: 2
-- $A = `\begin{bmatrix} 0.9 & 0.5 \\ 0.0 & 0.7 \end{bmatrix}`$
+- A = $`\begin{bmatrix} 0.9 & 0.5 \\ 0.0 & 0.7 \end{bmatrix}`$
 - $B = \mathrm{diag}(\sqrt{0.05}, \sqrt{0.02})$
-- $C = `\begin{bmatrix} 1.0 & 0.0 \\ 0.0 & 1.0 \end{bmatrix}`$
+- C = $`\begin{bmatrix} 1.0 & 0.0 \\ 0.0 & 1.0 \end{bmatrix}`$
 - $D = \mathrm{diag}(\sqrt{0.10}, \sqrt{0.10})$
 - Initial state covariance: $\Sigma = I$
 - Time steps: 1000
