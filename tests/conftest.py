@@ -1,8 +1,7 @@
 import numpy as np
 import pytest
 
-# import your simulator from your package/module
-# from yourpkg.simulator import simulate_lgssm, LGSSMSimulationResult
+
 from simulator.simulator_LGSSM import simulate_lgssm, LGSSMSimulationResult  
 
 @pytest.fixture(scope="session")

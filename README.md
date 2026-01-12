@@ -104,10 +104,10 @@ where:
 **Parameters for synthetic data generation:**
 - State dimension: 2
 - Observation dimension: 2
-- $A = \begin{bmatrix} 0.9 & 0.5 \\ 0.0 & 0.7 \end{bmatrix}$
-- $B = \operatorname{diag}(\sqrt{0.05}, \sqrt{0.02})$
-- $C = \begin{bmatrix} 1.0 & 0.0 \\ 0.0 & 1.0 \end{bmatrix}$
-- $D = \operatorname{diag}(\sqrt{0.10}, \sqrt{0.10})$
+- $A = \left[\begin{matrix} 0.9 & 0.5 \\ 0.0 & 0.7 \end{matrix}\right]$
+- $B = \mathrm{diag}(\sqrt{0.05}, \sqrt{0.02})$
+- $C = \left[\begin{matrix} 1.0 & 0.0 \\ 0.0 & 1.0 \end{matrix}\right]$
+- $D = \mathrm{diag}(\sqrt{0.10}, \sqrt{0.10})$
 - Initial state covariance: $\Sigma = I$
 - Time steps: 1000
 - Random seed: 42
@@ -182,9 +182,7 @@ This model is nonlinear and non-Gaussian in the observation equation, making it 
 ### 6.1 EDH Flow
 - The Exact Daum-Huang (EDH) flow implements a deterministic continuous-time Bayes update for particles.
 - The flow is defined by an ODE:
-  $$
-  \frac{dx}{d\lambda} = K(x, \lambda) \nabla_x \log p(y|x)
-  $$
+  $\frac{dx}{d\lambda} = K(x, \lambda) \nabla_x \log p(y|x)$
   where $K(x, \lambda)$ is a gain matrix, typically from linearization.
 - In EDH, the gain is computed globally from the linearized model at the ensemble mean.
 - Jacobian determinant and condition number are monitored for stability.
@@ -242,20 +240,14 @@ This model is nonlinear and non-Gaussian in the observation equation, making it 
 SPF performs the measurement update by tempering the likelihood over pseudo-time $\lambda\in[0,1]$, and adds diffusion to reduce particle collapse.
 
 Tempered posterior:
-$$
-\pi_{\lambda}(x) \propto p(y\mid x)^{\beta(\lambda)}\,p(x),\qquad \beta(0)=0,\;\beta(1)=1.
-$$
+$\pi_{\lambda}(x) \propto p(y\mid x)^{\beta(\lambda)}\,p(x),\qquad \beta(0)=0,\;\beta(1)=1.$
 Schedules used in the repo: linear $\beta(\lambda)=\lambda$ and a numerically-solved “optimal” $\beta^*(\lambda)$ (bisection/shooting).
 
 Local linear–Gaussian model used in the SPF:
-$$
-y = Hx + v,\qquad v\sim\mathcal{N}(0, R),\qquad x\sim\mathcal{N}(m_0, P_0).
-$$
+$y = Hx + v,\qquad v\sim\mathcal{N}(0, R),\qquad x\sim\mathcal{N}(m_0, P_0).$
 
 Stochastic flow (integrated by Euler–Maruyama):
-$$
-dX_{\lambda} = a(X_{\lambda},\lambda)\,d\lambda + B(X_{\lambda},\lambda)\,dW_{\lambda}.
-$$
+$dX_{\lambda} = a(X_{\lambda},\lambda)\,d\lambda + B(X_{\lambda},\lambda)\,dW_{\lambda}.$
 
 ### 8.2 Experiments and outputs
 Reproductions compare SPF (optimal $\beta^*$) vs SPF (linear $\beta$) vs SIR PF.
@@ -264,26 +256,20 @@ Reproductions compare SPF (optimal $\beta^*$) vs SPF (linear $\beta$) vs SIR PF.
 
 ## 9. Differentiable Particle Filters (DPF) and Resampling Variants
 
-The common goal is to map a weighted particle set $\{(x^{(i)}, w^{(i)})\}_{i=1}^N$ to an approximately unweighted set $\{\tilde{x}^{(j)}\}_{j=1}^N$ smoothly (and in some cases differentiably), improving stability in nonlinear/non-Gaussian settings.
+The common goal is to map a weighted particle set $\left\{\left(x^{(i)}, w^{(i)}\right)\right\}_{i=1}^{N}$ to an approximately unweighted set $\left\{\tilde{x}^{(j)}\right\}_{j=1}^{N}$ smoothly (and in some cases differentiably), improving stability in nonlinear/non-Gaussian settings.
 
 ### 9.1 Soft resampling (Gumbel–Softmax mixture)
 
 Soft resampling uses a mixture distribution
-$$
-q_i = (1-\alpha) w_i + \alpha\,\frac{1}{N},\qquad \alpha\in[0,1],
-$$
+$q_i = (1-\alpha) w_i + \alpha\,\frac{1}{N},\qquad \alpha\in[0,1],$
 and draws (soft) ancestor assignments using a Gumbel–Softmax reparameterization. This yields a differentiable approximation to categorical resampling and helps avoid hard particle impoverishment.
 
 ### 9.2 Optimal-transport (OT) resampling (Sinkhorn + barycentric projection)
 
 OT resampling computes an entropic-regularized transport plan $P\in\mathbb{R}^{N\times N}$ between the weighted empirical measure and a uniform target:
-$$
-a=w,\qquad b=\tfrac{1}{N}\mathbf{1},\qquad C_{ij}=\|x^{(i)}-x^{(j)}\|^2.
-$$
+$a=w,\qquad b=\tfrac{1}{N}\mathbf{1},\qquad C_{ij}=\|x^{(i)}-x^{(j)}\|^2.$
 Using Sinkhorn iterations, it forms $P$ (approximately satisfying $P\mathbf{1}=a$ and $P^T\mathbf{1}=b$), then applies the **barycentric projection**:
-$$
-    	ilde{x}^{(j)} = \frac{1}{b_j}\sum_i P_{ij} x^{(i)}\;\;\;\text{(so for }b_j=1/N:\; \tilde{x}^{(j)}=N\sum_i P_{ij}x^{(i)}\text{)}.
-$$
+$\tilde{x}^{(j)} = \frac{1}{b_j}\sum_i P_{ij} x^{(i)}\;\;\;\text{(so for }b_j=1/N:\; \tilde{x}^{(j)}=N\sum_i P_{ij}x^{(i)}\text{)}.$
 This produces smoothly moved particles with uniform weights and typically reduces Monte Carlo noise relative to discrete resampling.
 
 ### 9.3 Learned / RNN-based resampling
