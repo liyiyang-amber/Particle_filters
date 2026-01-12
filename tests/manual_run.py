@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """
-Manual Test Runner for State-Space Models and Filters
+Ma    # Run only SV tests
+    python tests/manual_run.py --phase sv
+    
+    # Run only MAT tests
+    python tests/manual_run.py --phase mat
+    
+    # Run only Particle Filter tests Test Runner for State-Space Models and Filters
 
 This script provides a convenient way to run tests in phases or all at once,
 with nice formatting and summary statistics.
@@ -20,20 +26,11 @@ Usage:
     python tests/manual_run.py --phase pf         # Run only Particle filter tests
     python tests/manual_run.py --phase edh        # Run only EDH particle filter tests
     python tests/manual_run.py --phase ledh       # Run only LEDH particle filter tests
-    python tests/manual_run.py --phase kpf        # Run only Kernel particle filter tests
-    python tests/manual_run.py --phase spf        # Run only Stochastic particle filter tests
-    python tests/manual_run.py --phase dpf-soft   # Run only DPF Soft resampling tests
-    python tests/manual_run.py --phase dpf-rnn    # Run only DPF RNN resampling tests
-    python tests/manual_run.py --phase dpf-ot     # Run only DPF OT resampling tests
-    python tests/manual_run.py --phase dpf        # Run all DPF tests (Soft + RNN + OT)
-    python tests/manual_run.py --phase dpf-lgssm  # Run DPF LGSSM integration tests
-    python tests/manual_run.py --phase dpf-sv     # Run DPF SV integration tests
-    python tests/manual_run.py --phase filters    # Run all filter tests (KF + EKF + UKF + PF + EDH + LEDH + KPF + SPF + DPF)
+    python tests/manual_run.py --phase filters    # Run all filter tests (KF + EKF + UKF + PF + EDH + LEDH)
     python tests/manual_run.py --phase integration # Run only integration tests
     python tests/manual_run.py --phase mat-filters # Run MAT filter integration tests
     python tests/manual_run.py --phase snlg-filters # Run SNLG filter integration tests
     python tests/manual_run.py --phase snlg-skewt-filters # Run SNLG Skew-t filter integration tests
-    python tests/manual_run.py --phase spf-integration # Run SPF integration tests
     python tests/manual_run.py --verbose          # Show verbose output
     python tests/manual_run.py --summary          # Show test statistics summary
 
@@ -53,19 +50,7 @@ Examples:
     # Run only LEDH Particle Filter tests
     python tests/manual_run.py --phase ledh
     
-    # Run only Stochastic Particle Filter tests
-    python tests/manual_run.py --phase spf
-    
-    # Run only DPF tests
-    python tests/manual_run.py --phase dpf
-    
-    # Run only DPF Soft resampling tests
-    python tests/manual_run.py --phase dpf-soft
-    
-    # Run DPF LGSSM integration tests
-    python tests/manual_run.py --phase dpf-lgssm
-    
-    # Run all filter tests (KF + EKF + UKF + PF + EDH + LEDH + KPF + SPF + DPF)
+    # Run all filter tests (KF + EKF + UKF + PF + EDH + LEDH)
     python tests/manual_run.py --phase filters
     
     # Show test statistics without running tests
@@ -127,11 +112,8 @@ def run_pytest(test_paths: List[str], description: str, verbose: bool = False) -
     
     print(f"{Colors.YELLOW}Command: {' '.join(cmd)}{Colors.END}\n")
     
-    # Get project root directory (parent of tests directory)
-    project_root = Path(__file__).parent.parent
-    
-    # Run pytest from project root
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(project_root))
+    # Run pytest
+    result = subprocess.run(cmd, capture_output=True, text=True)
     
     # Print output
     print(result.stdout)
@@ -277,21 +259,25 @@ def run_pf_tests(verbose: bool = False) -> Tuple[bool, int, int]:
 
 
 def run_edh_tests(verbose: bool = False) -> Tuple[bool, int, int]:
-    """Run EDH Particle filter tests (unit only, integration tests are in test_filters_sv_simulator.py)"""
+    """Run EDH Particle filter tests (unit + integration)"""
     test_paths = [
         "tests/unit_tests/models/test_ekf_tracker_wrapper.py",
         "tests/unit_tests/models/test_ukf_tracker_wrapper.py",
-        "tests/unit_tests/models/test_edh_flow_pf.py"
+        "tests/unit_tests/models/test_edh_flow_pf.py",
+        "tests/integration_tests/test_edh_ekf_vs_simulator_sv.py",
+        "tests/integration_tests/test_edh_ukf_vs_simulator_sv.py"
     ]
-    return run_pytest(test_paths, "EDH Particle Filter (EDH-PF) Unit Tests - EKF/UKF Trackers", verbose)
+    return run_pytest(test_paths, "EDH Particle Filter (EDH-PF) Tests - EKF/UKF Trackers + Integration", verbose)
 
 
 def run_ledh_tests(verbose: bool = False) -> Tuple[bool, int, int]:
-    """Run LEDH Particle filter tests (unit only, integration tests are in test_filters_sv_simulator.py)"""
+    """Run LEDH Particle filter tests (unit + integration)"""
     test_paths = [
-        "tests/unit_tests/models/test_ledh_flow_pf.py"
+        "tests/unit_tests/models/test_ledh_flow_pf.py",
+        "tests/integration_tests/test_ledh_ekf_vs_simulator_sv.py",
+        "tests/integration_tests/test_ledh_ukf_vs_simulator_sv.py"
     ]
-    return run_pytest(test_paths, "LEDH Particle Filter (LEDH-PF) Unit Tests - Per-Particle Linearization", verbose)
+    return run_pytest(test_paths, "LEDH Particle Filter (LEDH-PF) Tests - Per-Particle Linearization", verbose)
 
 
 def run_kernel_pf_tests(verbose: bool = False) -> Tuple[bool, int, int]:
@@ -303,27 +289,16 @@ def run_kernel_pf_tests(verbose: bool = False) -> Tuple[bool, int, int]:
     return run_pytest(test_paths, "Kernel Particle Filter (KPF) Unit Tests", verbose)
 
 
-def run_spf_tests(verbose: bool = False) -> Tuple[bool, int, int]:
-    """Run Stochastic Particle filter unit tests"""
-    test_paths = [
-        "tests/unit_tests/models/test_spf_linear_gaussian_bayes.py",
-        "tests/unit_tests/models/test_spf_condition_number.py",
-        "tests/unit_tests/models/test_spf_beta_schedule.py",
-        "tests/unit_tests/models/test_spf_shapes_and_api.py"
-    ]
-    return run_pytest(test_paths, "Stochastic Particle Filter (SPF) Unit Tests", verbose)
-
-
 def run_all_filter_tests(verbose: bool = False) -> Tuple[bool, int, int]:
-    """Run all filter tests (KF + EKF + UKF + PF + EDH + LEDH + KPF + SPF)"""
+    """Run all filter tests (KF + EKF + UKF + PF + EDH + LEDH)"""
     test_paths = ["tests/unit_tests/models/"]
-    return run_pytest(test_paths, "All Filter Unit Tests (KF + EKF + UKF + PF + EDH + LEDH + KPF + SPF)", verbose)
+    return run_pytest(test_paths, "All Filter Unit Tests (KF + EKF + UKF + PF + EDH + LEDH)", verbose)
 
 
 def run_integration_tests(verbose: bool = False) -> Tuple[bool, int, int]:
     """Run integration tests"""
     test_paths = ["tests/integration_tests/"]
-    return run_pytest(test_paths, "Integration Tests (Including MAT Filter Integration)", verbose)
+    return run_pytest(test_paths, "Integration Tests", verbose)
 
 
 def run_mat_filter_integration_tests(verbose: bool = False) -> Tuple[bool, int, int]:
@@ -355,71 +330,6 @@ def run_kernel_pf_integration_tests(verbose: bool = False) -> Tuple[bool, int, i
         "tests/integration_tests/test_kpf_vs_simulator_lorenz96.py"
     ]
     return run_pytest(test_paths, "Kernel Particle Filter (KPF) Integration Tests (LGSSM + Lorenz96)", verbose)
-
-
-def run_spf_integration_tests(verbose: bool = False) -> Tuple[bool, int, int]:
-    """Run Stochastic Particle Filter integration tests"""
-    test_paths = [
-        "tests/integration_tests/test_spf_vs_kalman_posterior.py",
-        "tests/integration_tests/test_spf_sequential_filtering.py"
-    ]
-    return run_pytest(test_paths, "Stochastic Particle Filter (SPF) Integration Tests", verbose)
-
-
-def run_dpf_soft_tests(verbose: bool = False) -> Tuple[bool, int, int]:
-    """Run Differentiable Particle Filter with Soft Resampling unit tests"""
-    test_paths = [
-        "tests/unit_tests/models/test_dpf_soft_shapes_and_api.py"
-    ]
-    return run_pytest(test_paths, "DPF with Soft Resampling (Gumbel-Softmax) Unit Tests", verbose)
-
-
-def run_dpf_rnn_tests(verbose: bool = False) -> Tuple[bool, int, int]:
-    """Run Differentiable Particle Filter with RNN Resampling unit tests"""
-    test_paths = [
-        "tests/unit_tests/models/test_dpf_rnn_shapes_and_api.py"
-    ]
-    return run_pytest(test_paths, "DPF with RNN Resampling (LSTM/GRU) Unit Tests", verbose)
-
-
-def run_dpf_ot_tests(verbose: bool = False) -> Tuple[bool, int, int]:
-    """Run Differentiable Particle Filter with Optimal Transport Resampling unit tests"""
-    test_paths = [
-        "tests/unit_tests/models/test_dpf_ot_shapes_and_api.py"
-    ]
-    return run_pytest(test_paths, "DPF with Optimal Transport (Sinkhorn) Unit Tests", verbose)
-
-
-def run_dpf_lgssm_integration_tests(verbose: bool = False) -> Tuple[bool, int, int]:
-    """Run DPF integration tests with LGSSM simulator"""
-    test_paths = [
-        "tests/integration_tests/test_dpf_soft_vs_simulator_lgssm.py",
-        "tests/integration_tests/test_dpf_rnn_vs_simulator_lgssm.py",
-        "tests/integration_tests/test_dpf_ot_vs_simulator_lgssm.py"
-    ]
-    return run_pytest(test_paths, "DPF Integration Tests with LGSSM (Soft + RNN + OT)", verbose)
-
-
-def run_dpf_sv_integration_tests(verbose: bool = False) -> Tuple[bool, int, int]:
-    """Run DPF integration tests with Stochastic Volatility simulator"""
-    test_paths = [
-        "tests/integration_tests/test_dpf_vs_sv_simulator.py"
-    ]
-    return run_pytest(test_paths, "DPF Integration Tests with Stochastic Volatility (Soft + RNN + OT)", verbose)
-
-
-def run_all_dpf_tests(verbose: bool = False) -> Tuple[bool, int, int]:
-    """Run all DPF tests (unit + integration)"""
-    test_paths = [
-        "tests/unit_tests/models/test_dpf_soft_shapes_and_api.py",
-        "tests/unit_tests/models/test_dpf_rnn_shapes_and_api.py",
-        "tests/unit_tests/models/test_dpf_ot_shapes_and_api.py",
-        "tests/integration_tests/test_dpf_soft_vs_simulator_lgssm.py",
-        "tests/integration_tests/test_dpf_rnn_vs_simulator_lgssm.py",
-        "tests/integration_tests/test_dpf_ot_vs_simulator_lgssm.py",
-        "tests/integration_tests/test_dpf_vs_sv_simulator.py"
-    ]
-    return run_pytest(test_paths, "All DPF Tests (Soft + RNN + OT: Unit + Integration)", verbose)
 
 
 def run_all_tests(verbose: bool = False) -> Tuple[bool, int, int]:
@@ -475,38 +385,26 @@ def run_all_tests(verbose: bool = False) -> Tuple[bool, int, int]:
     all_passed.append(passed)
     all_failed.append(failed)
     
-    # Phase 9: Stochastic Particle filter tests
-    print_section("PHASE 9: Stochastic Particle Filter (SPF)")
-    success, passed, failed = run_spf_tests(verbose)
-    all_passed.append(passed)
-    all_failed.append(failed)
-    
-    # Phase 10: Differentiable Particle Filter tests (DPF)
-    print_section("PHASE 10: Differentiable Particle Filters (DPF-Soft + DPF-RNN + DPF-OT)")
-    success, passed, failed = run_all_dpf_tests(verbose)
-    all_passed.append(passed)
-    all_failed.append(failed)
-    
-    # Phase 11: Integration tests
-    print_section("PHASE 11: Integration Tests")
+    # Phase 9: Integration tests
+    print_section("PHASE 9: Integration Tests")
     success, passed, failed = run_integration_tests(verbose)
     all_passed.append(passed)
     all_failed.append(failed)
     
-    # Phase 12: MAT Filter Integration (EKF, UKF, EDH, LEDH)
-    print_section("PHASE 12: MAT Filter Integration (EKF + UKF + EDH + LEDH)")
+    # Phase 10: MAT Filter Integration (EKF, UKF, EDH, LEDH)
+    print_section("PHASE 10: MAT Filter Integration (EKF + UKF + EDH + LEDH)")
     success, passed, failed = run_mat_filter_integration_tests(verbose)
     all_passed.append(passed)
     all_failed.append(failed)
     
-    # Phase 13: SNLG Filter Integration (KF, UKF, EKF, EDH, LEDH)
-    print_section("PHASE 13: SNLG Filter Integration (KF + UKF + EKF + EDH + LEDH)")
+    # Phase 11: SNLG Filter Integration (KF, UKF, EKF, EDH, LEDH)
+    print_section("PHASE 11: SNLG Filter Integration (KF + UKF + EKF + EDH + LEDH)")
     success, passed, failed = run_snlg_filter_integration_tests(verbose)
     all_passed.append(passed)
     all_failed.append(failed)
     
-    # Phase 14: SNLG Skew-t Filter Integration (EKF, UKF, PF, EDH, LEDH)
-    print_section("PHASE 14: SNLG Skew-t Filter Integration (EKF + UKF + PF + EDH + LEDH)")
+    # Phase 12: SNLG Skew-t Filter Integration (EKF, UKF, PF, EDH, LEDH)
+    print_section("PHASE 12: SNLG Skew-t Filter Integration (EKF + UKF + PF + EDH + LEDH)")
     success, passed, failed = run_sn_skewt_filter_integration_tests(verbose)
     all_passed.append(passed)
     all_failed.append(failed)
@@ -569,11 +467,7 @@ def print_test_statistics():
             "LEDH Particle Filter - EKF Integration": 7,
             "LEDH Particle Filter - UKF Integration": 7,
             "Kernel Particle Filter (KPF) - Unit Tests": 47,
-            "Stochastic Particle Filter (SPF) - Unit Tests": 69,
-            "DPF with Soft Resampling - Unit Tests": 15,
-            "DPF with RNN Resampling - Unit Tests": 20,
-            "DPF with Optimal Transport - Unit Tests": 24,
-            "Subtotal": 405
+            "Subtotal": 277
         },
         "Integration Tests": {
             "KF Integration": 2,
@@ -597,16 +491,7 @@ def print_test_statistics():
             "SNLG Skew-t - LEDH-UKF Integration": 3,
             "KPF-LGSSM Integration": 5,
             "KPF-Lorenz96 Integration": 6,
-            "SPF-Kalman Posterior Convergence": 15,
-            "SPF-Sequential Filtering": 10,
-            "DPF-Soft LGSSM Integration": 7,
-            "DPF-RNN LGSSM Integration": 10,
-            "DPF-OT LGSSM Integration": 11,
-            "DPF-Soft SV Integration": 3,
-            "DPF-RNN SV Integration": 3,
-            "DPF-OT SV Integration": 4,
-            "DPF Comparative Tests (SV)": 2,
-            "Subtotal": 168
+            "Subtotal": 103
         }
     }
     
@@ -630,8 +515,8 @@ def print_test_statistics():
     print(f"{Colors.BOLD}{Colors.MAGENTA}{'─' * 80}{Colors.END}\n")
     
     print(f"{Colors.BOLD}Test Coverage:{Colors.END}")
-    print(f"  • Unit Tests: {Colors.GREEN}676{Colors.END} tests (80%)")
-    print(f"  • Integration Tests: {Colors.GREEN}168{Colors.END} tests (20%)")
+    print(f"  • Unit Tests: {Colors.GREEN}532{Colors.END} tests (84%)")
+    print(f"  • Integration Tests: {Colors.GREEN}114{Colors.END} tests (16%)")
     print()
     
     print(f"{Colors.BOLD}Features Tested:{Colors.END}")
@@ -669,21 +554,6 @@ def print_test_statistics():
     print(f"  ✓ Gaspari-Cohn localization for spatial systems")
     print(f"  ✓ Pseudo-time integration with adaptive step control")
     print(f"  ✓ KPF integration with LGSSM and Lorenz 96 systems")
-    print(f"  ✓ Stochastic Particle Filter (SPF) with normalized homotopy")
-    print(f"  ✓ Linear-Gaussian Bayes helper class and Kalman posterior")
-    print(f"  ✓ Spectral condition number (κ₂) computation and derivatives")
-    print(f"  ✓ Optimal beta schedule via ODE solving (shooting + bisection)")
-    print(f"  ✓ SPF convergence to analytical Kalman posterior")
-    print(f"  ✓ SPF sequential filtering and tracking performance")
-    print(f"  ✓ Differentiable Particle Filters (DPF) with end-to-end learning")
-    print(f"  ✓ DPF with Soft Resampling via Gumbel-Softmax trick")
-    print(f"  ✓ DPF with RNN-based Resampling (LSTM/GRU architectures)")
-    print(f"  ✓ DPF with Optimal Transport via Sinkhorn algorithm")
-    print(f"  ✓ Barycentric projection for differentiable resampling")
-    print(f"  ✓ Assignment matrix generation and probability distributions")
-    print(f"  ✓ DPF integration with LGSSM (linear Gaussian systems)")
-    print(f"  ✓ DPF integration with Stochastic Volatility (nonlinear model)")
-    print(f"  ✓ Comparative analysis of DPF variants (Soft vs RNN vs OT)")
     print()
 
 
@@ -696,7 +566,7 @@ def main():
     )
     parser.add_argument(
         "--phase",
-        choices=["simulator", "lgssm", "sv", "mat", "snlg", "snlg-skewt", "lorenz96", "kf", "kalman", "ekf", "ukf", "pf", "particle", "edh", "ledh", "kpf", "kernel-pf", "spf", "stochastic-pf", "dpf-soft", "dpf-rnn", "dpf-ot", "dpf", "dpf-lgssm", "dpf-sv", "filters", "integration", "mat-filters", "snlg-filters", "snlg-skewt-filters", "kpf-integration", "spf-integration", "all"],
+        choices=["simulator", "lgssm", "sv", "mat", "snlg", "snlg-skewt", "lorenz96", "kf", "kalman", "ekf", "ukf", "pf", "particle", "edh", "ledh", "kpf", "kernel-pf", "filters", "integration", "mat-filters", "snlg-filters", "snlg-skewt-filters", "kpf-integration", "all"],
         default="all",
         help="Which test phase to run (default: all)"
     )
@@ -753,20 +623,6 @@ def main():
         success, passed, failed = run_ledh_tests(args.verbose)
     elif args.phase in ["kpf", "kernel-pf"]:
         success, passed, failed = run_kernel_pf_tests(args.verbose)
-    elif args.phase in ["spf", "stochastic-pf"]:
-        success, passed, failed = run_spf_tests(args.verbose)
-    elif args.phase == "dpf-soft":
-        success, passed, failed = run_dpf_soft_tests(args.verbose)
-    elif args.phase == "dpf-rnn":
-        success, passed, failed = run_dpf_rnn_tests(args.verbose)
-    elif args.phase == "dpf-ot":
-        success, passed, failed = run_dpf_ot_tests(args.verbose)
-    elif args.phase == "dpf":
-        success, passed, failed = run_all_dpf_tests(args.verbose)
-    elif args.phase == "dpf-lgssm":
-        success, passed, failed = run_dpf_lgssm_integration_tests(args.verbose)
-    elif args.phase == "dpf-sv":
-        success, passed, failed = run_dpf_sv_integration_tests(args.verbose)
     elif args.phase == "filters":
         success, passed, failed = run_all_filter_tests(args.verbose)
     elif args.phase == "integration":
@@ -779,8 +635,6 @@ def main():
         success, passed, failed = run_sn_skewt_filter_integration_tests(args.verbose)
     elif args.phase == "kpf-integration":
         success, passed, failed = run_kernel_pf_integration_tests(args.verbose)
-    elif args.phase == "spf-integration":
-        success, passed, failed = run_spf_integration_tests(args.verbose)
     else:  # all
         success, passed, failed = run_all_tests(args.verbose)
     
