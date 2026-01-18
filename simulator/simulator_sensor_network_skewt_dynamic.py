@@ -13,23 +13,6 @@ Skewed-t Spatial Sensor Network Simulator.
 
 This module simulates large spatial sensor networks with
 heavy-tailed, skewed dynamics and Poisson count measurements.
-
-Model:
-    State (d-dimensional) on a sqrt(d) x sqrt(d) grid.
-    Dynamics (GH skewed-t, via Normal–Inverse-Gamma mixture):
-        x_k = mu_k + W_k * gamma + sqrt(W_k) * L z_k,
-        mu_k = alpha * x_{k-1},  z_k ~ N(0, I_d),
-        W_k ~ InvGamma(nu/2, nu/2),  nu > 2.
-        L is Cholesky of a spatial covariance Sigma.
-
-    Measurements (independent Poisson per sensor):
-        z_{c,k} ~ Poisson(m1 * exp(m2 * x_{c,k}))
-
-References:
-    • Normal–variance-mean mixture representation of (skewed) t and GH families.
-    • Practical specialization used here adopts W ~ InvGamma(nu/2, nu/2),
-      which recovers Student-t when gamma = 0, and yields a skew-t
-      when gamma != 0 via the linear mean term W * gamma.
 """
 
 from dataclasses import dataclass
@@ -42,18 +25,21 @@ from numpy.linalg import cholesky, LinAlgError
 Array = np.ndarray
 
 
-# ---------------------------------------------------------------------
 # Configuration dataclasses
-# ---------------------------------------------------------------------
 @dataclass
 class GridConfig:
     """Configuration of the spatial grid and covariance.
 
-    Attributes:
-        d: Number of sensors (must be a perfect square).
-        alpha0: Spatial covariance amplitude for the exponential kernel.
-        alpha1: Diagonal jitter added to Sigma.
-        beta: Length-scale parameter for the exponential kernel.
+    Parameters
+    ----------
+    d: int 
+        Number of sensors (must be a perfect square).
+    alpha0: float
+        Spatial covariance amplitude for the exponential kernel.
+    alpha1: float
+        Diagonal jitter added to Sigma.
+    beta: float
+        Length-scale parameter for the exponential kernel.
     """
     d: int = 144
     alpha0: float = 1.0
@@ -65,14 +51,22 @@ class GridConfig:
 class DynConfig:
     """Configuration of the dynamics (skewed-t via N-InvGamma mixture).
 
-    Attributes:
-        alpha: AR(1) coefficient for the state mean mu_k = alpha * x_{k-1}.
-        nu: Degrees of freedom (> 2) controlling the InvGamma mixing; lower => heavier tails.
-        gamma_scale: Scalar multiplier for the skew direction (applied to a unit vector if gamma_vec=None).
-        gamma_vec: Optional explicit skew vector of shape (d,). If provided, overrides gamma_scale heuristic.
-        clip_x: Optional tuple (xmin, xmax) to clip latent x before exponentiation in the measurement.
-        chol_jitter: Added to the diagonal of Sigma when forming the Cholesky to improve numerical stability.
-        seed: RNG seed for reproducibility.
+    Parameters
+    ----------
+    alpha: float
+        AR(1) coefficient for the state mean mu_k = alpha * x_{k-1}.
+    nu: float
+        Degrees of freedom (> 2) controlling the InvGamma mixing; lower => heavier tails.
+    gamma_scale: float
+        Scalar multiplier for the skew direction (applied to a unit vector if gamma_vec=None).
+    gamma_vec: array, shape (d,), optional
+        Optional explicit skew vector of shape (d,). If provided, overrides gamma_scale heuristic.
+    clip_x: optional tuple of float
+        Optional tuple (xmin, xmax) to clip latent x before exponentiation in the measurement.
+    chol_jitter: float
+        Added to the diagonal of Sigma when forming the Cholesky to improve numerical stability.
+    seed: int | None
+        RNG seed for reproducibility.
     """
     alpha: float = 0.9
     nu: float = 8.0
@@ -87,9 +81,12 @@ class DynConfig:
 class MeasConfig:
     """Configuration of the Poisson count measurement model.
 
-    Attributes:
-        m1: Multiplicative intensity scale.
-        m2: Exponential sensitivity to the latent state.
+    Parameters
+    ----------
+    m1: float
+        Multiplicative intensity scale.
+    m2: float
+        Exponential sensitivity to the latent state.
     """
     m1: float = 1.0
     m2: float = 1.0 / 3.0
@@ -99,19 +96,20 @@ class MeasConfig:
 class SimConfig:
     """Top-level simulation configuration for multiple trials.
 
-    Attributes:
-        T: Number of time steps per trial.
-        n_trials: Number of independent trials.
-        save_lambda: Whether to save lambda_k (Poisson rates) as diagnostics.
+    Parameters
+    ----------
+    T: int
+        Number of time steps per trial.
+    n_trials: int
+        Number of independent trials.
+    save_lambda: bool
+        Whether to save lambda_k (Poisson rates) as diagnostics.
     """
     T: int = 10
     n_trials: int = 1
     save_lambda: bool = True
 
-
-# ---------------------------------------------------------------------
 # Utility functions
-# ---------------------------------------------------------------------
 def make_lattice(d: int) -> Array:
     """Return (d, 2) array of 2D coordinates for a sqrt(d) x sqrt(d) lattice.
 
@@ -132,13 +130,20 @@ def build_spatial_cov(R: Array, alpha0: float, alpha1: float, beta: float) -> Ar
 
     Sigma_{ij} = alpha0 * exp(-||Ri - Rj||^2 / beta) + alpha1 * 1{i=j}.
 
-    Args:
-        R: (d, 2) sensor coordinates.
-        alpha0: Spatial amplitude.
-        alpha1: Diagonal nugget.
-        beta: Length-scale parameter.
+    Parameters
+    ----------
+    R : ndarray
+        (d, 2) sensor coordinates.
+    alpha0 : float
+        Spatial amplitude.
+    alpha1 : float
+        Diagonal nugget.
+    beta : float
+        Length-scale parameter.
 
-    Returns:
+    Returns
+    -------
+    ndarray
         (d, d) positive-definite covariance matrix.
     """
     d = R.shape[0]
@@ -156,12 +161,18 @@ def cholesky_psd(Sigma: Array, jitter: float = 1e-8, max_tries: int = 5) -> Arra
     If Sigma is not strictly PD due to numerical issues, progressively
     increase diagonal jitter until factorization succeeds.
 
-    Args:
-        Sigma: (d, d) covariance matrix.
-        jitter: Initial diagonal jitter.
-        max_tries: Maximum number of jitter escalations.
+    Parameters
+    ----------
+    Sigma : ndarray
+        (d, d) covariance matrix.
+    jitter : float, optional
+        Initial jitter magnitude. Default is 1e-8.
+    max_tries : int, optional
+        Maximum number of jitter attempts. Default is 5.
 
-    Returns:
+    Returns
+    -------
+    ndarray
         Lower-triangular Cholesky factor L such that L @ L.T ≈ Sigma.
     """
     try_jitter = jitter
@@ -181,13 +192,19 @@ def sample_inverse_gamma(shape: float, scale: float, rng: np.random.Generator) -
 
     Uses the relation: if Y ~ Gamma(shape, 1/scale), then W = 1 / Y ~ InvGamma(shape, scale).
 
-    Args:
-        shape: Shape parameter (a > 0).
-        scale: Scale parameter (b > 0).
-        rng: Numpy Generator.
+    Parameters
+    ----------
+    shape : float
+        Shape parameter (a > 0).
+    scale : float
+        Scale parameter (b > 0).
+    rng : np.random.Generator
+        Numpy Generator.
 
-    Returns:
-        Scalar inverse-gamma sample.
+    Returns
+    -------
+    float
+        Sample from InvGamma(shape, scale).
     """
     # numpy.gamma uses shape=k and scale=theta; we want rate = 1/scale => theta = 1/scale
     y = rng.gamma(shape=shape, scale=1.0 / scale)
@@ -211,9 +228,7 @@ def prepare_gamma_vector(d: int, gamma_scale: float, gamma_vec: Optional[Array],
     return gamma_scale * (v / v_norm)
 
 
-# ---------------------------------------------------------------------
 # Core simulation routines
-# ---------------------------------------------------------------------
 def simulate_trial(
     grid_cfg: GridConfig,
     dyn_cfg: DynConfig,
@@ -344,9 +359,7 @@ def simulate_many(
     return result
 
 
-# ---------------------------------------------------------------------
 # Convenience save/load
-# ---------------------------------------------------------------------
 def save_npz(path: str, data: Dict[str, Any]) -> None:
     """Save dictionary of numpy arrays / lists to a .npz file.
 

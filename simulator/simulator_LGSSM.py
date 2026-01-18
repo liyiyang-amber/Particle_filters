@@ -9,37 +9,46 @@ import os
 
 @dataclass
 class LGSSMSimulationResult:
-    """Container for simulated linear Gaussian state-space model data."""
+    """Container for simulated linear Gaussian state-space model data.
+
+    Parameters
+    ----------
+    X : NDArray
+        Array of shape (N, nx) containing latent states x_1, ..., x_N.
+    Y : NDArray
+        Array of shape (N, ny) containing observations y_1, ..., y_N.
+    A : NDArray
+        State transition matrix (nx, nx).
+    B : NDArray
+        Process-noise input matrix (nx, nv).
+    C : NDArray
+        Observation matrix (ny, nx).
+    D : NDArray
+        Measurement-noise input matrix (ny, nw).
+    """
     X: NDArray[np.float64]
-    """Array of shape (N, nx) containing latent states x_1, ..., x_N."""
     Y: NDArray[np.float64]
-    """Array of shape (N, ny) containing observations y_1, ..., y_N."""
     A: NDArray[np.float64]
-    """State transition matrix (nx, nx)."""
     B: NDArray[np.float64]
-    """Process-noise input matrix (nx, nv)."""
     C: NDArray[np.float64]
-    """Observation matrix (ny, nx)."""
     D: NDArray[np.float64]
-    """Measurement-noise input matrix (ny, nw)."""
     
     def to_file(
         self,
         path: str,
-        format: "npz",
+        format: str,
         overwrite: bool = False,
     ) -> None:
-        """
-        Save the simulated data to a file for Kalman filtering.
+        """Save the simulated data to a file for Kalman filtering.
 
         Parameters
         ----------
         path : str
             Destination file path (without extension for .npz format).
-        format : 'npz'
-            Output format. 
-        overwrite : bool, default=False
-            If False, raises an error when the file already exists.
+        format : str
+            Output format ('npz').
+        overwrite : bool, optional
+            If False, raises an error when the file already exists. Default is False.
 
         Raises
         ------
@@ -101,10 +110,6 @@ def simulate_lgssm(
             - Y : ndarray of shape (N, ny)
                 Simulated observations y_1, ..., y_N.
 
-    Notes
-    -----
-    The function follows the standard linear-Gaussian model.  The initial state is drawn from N(0, Σ), and all noises are
-    independent standard normals.
     """
     rng = np.random.default_rng(seed)
 

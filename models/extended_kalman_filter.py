@@ -25,10 +25,14 @@ HFn = Callable[[Array], Array]
 class EKFState:
     """Container for EKF posterior state.
 
-    Attributes:
-        mean (np.ndarray): Posterior state mean (shape: (nx,)).
-        cov (np.ndarray): Posterior state covariance (shape: (nx, nx)).
-        t (int): Discrete time index of this posterior.
+    Parameters
+    ----------
+    mean : np.ndarray
+        Posterior state mean (shape: (nx,)).
+    cov : np.ndarray
+        Posterior state covariance (shape: (nx, nx)).
+    t : int
+        Discrete time index of this posterior.
     """
 
     mean: Array
@@ -44,13 +48,20 @@ def numerical_jacobian_g(
 ) -> Array:
     """Compute a finite-difference Jacobian of the motion model w.r.t. x.
 
-    Args:
-        g: Motion function g(x, u).
-        x: Expansion point (nx,).
-        u: Control input or None.
-        eps: Finite-difference step.
+    Parameters
+    ----------
+    g : callable
+        Motion function g(x, u).
+    x : ndarray
+        Expansion point (nx,).
+    u : ndarray, optional
+        Control input or None.
+    eps : float, optional
+        Finite-difference step. Default is 1e-6.
 
-    Returns:
+    Returns
+    -------
+    ndarray
         (nx, nx) Jacobian matrix.
     """
     x = np.asarray(x, dtype=float)
@@ -71,12 +82,18 @@ def numerical_jacobian_h(
 ) -> Array:
     """Compute a finite-difference Jacobian of the measurement model w.r.t. x.
 
-    Args:
-        h: Measurement function h(x).
-        x: Expansion point (nx,).
-        eps: Finite-difference step.
+    Parameters
+    ----------
+    h : callable
+        Measurement function h(x).
+    x : ndarray
+        Expansion point (nx,).
+    eps : float, optional
+        Finite-difference step. Default is 1e-6.
 
-    Returns:
+    Returns
+    -------
+    ndarray
         (nz, nx) Jacobian matrix.
     """
     x = np.asarray(x, dtype=float)
@@ -101,7 +118,8 @@ class ExtendedKalmanFilter:
         G_k = ∂g/∂x evaluated at (x_{k-1|k-1}, u_{k-1})
         H_k = ∂h/∂x evaluated at x_{k|k-1}
 
-    Args:
+    Parameters
+    ----------
         g: Motion function g(x, u) → (nx,).
         h: Measurement function h(x) → (nz,).
         Q: Process noise covariance (nx, nx).
@@ -146,11 +164,15 @@ class ExtendedKalmanFilter:
     def predict(self, state: EKFState, u: Optional[Array] = None) -> EKFState:
         """Run the EKF prediction step.
 
-        Args:
-            state: Previous posterior state (mean, cov, t).
-            u: Optional control input u_{k-1}.
+        Parameters
+        ----------
+        state:
+            Previous posterior state (mean, cov, t).
+        u:
+            Optional control input u_{k-1}.
 
-        Returns:
+        Returns
+        -------
             Predicted state EKFState(mean= x_{k|k-1}, cov= P_{k|k-1}, t= state.t + 1).
         """
         x = np.asarray(state.mean, dtype=float)
@@ -174,11 +196,13 @@ class ExtendedKalmanFilter:
     def update(self, pred: EKFState, z: Array) -> EKFState:
         """Run the EKF measurement update.
 
-        Args:
+        Parameters
+        ----------
             pred: Predicted state (from `predict`).
             z: Observation vector z_k (shape: (nz,)).
 
-        Returns:
+        Returns
+        -------
             Posterior state EKFState(mean= x_{k|k}, cov= P_{k|k}, t= pred.t).
         """
         x_pred = np.asarray(pred.mean, dtype=float)
@@ -219,12 +243,14 @@ class ExtendedKalmanFilter:
     def step(self, state: EKFState, z: Array, u: Optional[Array] = None) -> EKFState:
         """Run a full EKF step (predict then update).
 
-        Args:
+        Parameters
+        ----------
             state: Previous posterior state.
             z: Measurement at the next time.
             u: Optional control input for the motion model.
 
-        Returns:
+        Returns
+        -------
             Updated EKFState at the new time.
         """
         pred = self.predict(state, u=u)

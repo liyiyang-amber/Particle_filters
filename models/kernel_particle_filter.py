@@ -1,15 +1,14 @@
+"""Kernel Particle Filter implementation."""
 from dataclasses import dataclass
 from typing import Callable, Optional, Tuple
 import numpy as np
 
 Array = np.ndarray
 
-# -----------------------------------------------------------------------------
-# Utility: Gaspari–Cohn localization (compactly supported C^2 taper)
-# -----------------------------------------------------------------------------
 
+# Utility: Gaspari–Cohn localization
 def gaspari_cohn(r: Array) -> Array:
-    """Gaspari–Cohn correlation taper ρ(r) with compact support.
+    """Gaspari–Cohn correlation taper with compact support.
     
     Parameters
     ----------
@@ -46,7 +45,7 @@ def gaspari_cohn(r: Array) -> Array:
         + rm**5 / 12
         - 2 / (3 * rm)
     )
-    # r > 2 => 0 (already set)
+    # r > 2 => 0 
     return out
 
 
@@ -81,10 +80,8 @@ def build_localization_matrix(n: int, radius: float, metric: Optional[Array] = N
     return gaspari_cohn(r)
 
 
-# -----------------------------------------------------------------------------
-# Kernel: diagonal matrix-valued RBF and its divergence term
-# -----------------------------------------------------------------------------
 
+# Kernel: diagonal matrix-valued RBF and its divergence term
 def rbf_1d(d: Array, ell: float) -> Tuple[Array, Array]:
     """1D RBF kernel and its derivative wrt first argument.
     
@@ -114,21 +111,6 @@ def scalar_kernel_full_matrix(
     lengthscale: float,
 ) -> Tuple[Array, Array, Array]:
     """Compute full-matrix scalar kernel K(x, x_m) and div_x K(x, x_m).
-    
-    This function implements a TRUE scalar (isotropic) RBF kernel:
-        K(x,z) = k(||x-z||) * 1_{n×n}  (all entries equal to k(r))
-    where k(r) = exp(-0.5 * r^2 / ell^2) is based on Euclidean distance.
-    
-    For a full matrix with all entries equal to k(r):
-        K_ij = k(r) for all i,j
-    
-    The divergence with respect to x:
-        (∇_x · K)_i = Σ_j \partial K_ij/\partial x_j = Σ_j \partial k/\partial x_j
-                    = n * \partial k/\partial x_i  
-    
-    But more carefully:
-        \partial K_ij/\partial x_j = \partial k(r)/\partial x_j = (\partial k/\partial r)(\partial r/\partial x_j) = -k(r)/ell^2 * (x_j-z_j)
-    So: (∇·K)_i = Σ_j [-k(r)/ell^2 * (x_j-z_j)] = -k(r)/ell^2 * Σ_j(x_j-z_j)
     
     Parameters
     ----------
@@ -183,12 +165,6 @@ def matrix_kernel_and_divergence(
 ) -> Tuple[Array, Array]:
     """Compute diagonal matrix-valued kernel K(x, x_m) and div_x K(x, x_m).
     
-    This function implements a separable, component-wise RBF kernel:
-        K(x,z) = diag( k_1(x_1, z_1), ..., k_n(x_n, z_n) )
-    and the divergence with respect to x:
-        ∇_x · K(x,z) = [ \partial K_11/\partial x_1, ..., \partial K_nn/\partial x_n ]^T
-    since K is diagonal in components.
-    
     Parameters
     ----------
     x : np.ndarray, shape (n,)
@@ -227,10 +203,7 @@ def matrix_kernel_and_divergence(
     return K_blocks, divK
 
 
-# -----------------------------------------------------------------------------
 # Model and configuration
-# -----------------------------------------------------------------------------
-
 ObsFn = Callable[[Array], Array]
 JacFn = Callable[[Array], Array]
 
@@ -238,7 +211,7 @@ JacFn = Callable[[Array], Array]
 class Model:
     """User model with observation function and its Jacobian.
     
-    Attributes
+    Parameters
     ----------
     H : Callable[[np.ndarray], np.ndarray]
         Observation function: y = H(x). Input shape (n,), output shape (m,).
@@ -279,10 +252,7 @@ class KPFState:
     ds_history: list = None  # adaptive step sizes (theta) for diagnostics
 
 
-# -----------------------------------------------------------------------------
-# Core: Kernel Particle Filter
-# -----------------------------------------------------------------------------
-
+# Kernel Particle Filter
 class KernelParticleFilter:
     """Matrix-kernel Particle Flow Filter.
     
@@ -299,8 +269,7 @@ class KernelParticleFilter:
         self.model = model
         self.cfg = config or KPFConfig()
 
-    # ------------------------------ helpers ---------------------------------
-
+    # helpers 
     @staticmethod
     def mean_and_cov(X: Array, reg: float = 0.0) -> Tuple[Array, Array]:
         """Compute mean and covariance with optional ridge regularization."""

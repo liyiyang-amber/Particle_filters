@@ -10,13 +10,20 @@ import numpy as np
 class SV1DResults:
     """Simulation results for the 1-D stochastic volatility model.
 
-    Attributes:
-        X (np.ndarray): Latent states of shape (n,).
-        Y (np.ndarray): Observations of shape (n,).
-        alpha (float): AR(1) coefficient |alpha| < 1.
-        sigma (float): State noise std (\sigma >= 0).
-        beta (float): Observation scale (\beta >= 0).
-        n (int): Number of time steps.
+    Parameters
+    ----------
+        X: np.ndarray
+            Latent states of shape (n,).
+        Y: np.ndarray
+            Observations of shape (n,).
+        alpha: float
+            AR(1) coefficient |alpha| < 1.
+        sigma: float
+            State noise std (\sigma >= 0).
+        beta: float
+            Observation scale (\beta >= 0).
+        n: int
+            Number of time steps.
         seed (int | None): RNG seed used.
     """
     X: np.ndarray
@@ -57,16 +64,26 @@ def simulate_sv_1d(
         X_t = \alpha X_{t-1} + \sigma V_t,  V_t ~ N(0, 1)
         Y_t = \beta \exp(0.5 X_t) W_t, W_t ~ N(0, 1)
 
-    Args:
-        n: Number of time steps (n >= 1).
-        alpha: AR(1) coefficient (|\alpha| < 1 for stationarity).
-        sigma: Process noise standard deviation (\sigma >= 0).
-        beta: Observation scale (\beta >= 0).
-        seed: RNG seed for reproducibility.
-        x0: Optional initial state. If None, draw from the stationary N(0, \sigma^2/(1-\alpha^2)).
+    Parameters
+    ----------
+    n : int
+        Number of time steps (n >= 1).
+    alpha : float
+        AR(1) coefficient (|\alpha| < 1 for stationarity).
+    sigma : float
+        Process noise standard deviation (\sigma >= 0).
+    beta : float
+        Observation scale (\beta >= 0).
+    seed : int, optional
+        RNG seed for reproducibility. Default is None.
+    x0 : float, optional
+        Initial state. If None, draw from the stationary N(0, \sigma^2/(1-\alpha^2)).
+        Default is None.
 
-    Returns:
-        SV1DResults with arrays X (n,) and Y (n,).
+    Returns
+    -------
+    SV1DResults
+        Results with arrays X (n,) and Y (n,).
     """
     if n <= 0:
         raise ValueError("n must be positive.")

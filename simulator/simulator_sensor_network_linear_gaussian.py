@@ -24,16 +24,26 @@ Array = np.ndarray
 class SimConfig:
     """Configuration for the LSSN simulation.
 
-    Attributes:
-        d: State dimension (must be a perfect square, d = n^2).
-        alpha: Scalar linear dynamics coefficient in x_t = alpha * x_{t-1} + v_t.
-        alpha0: Amplitude for the squared–exponential kernel.
-        alpha1: Nugget (diagonal jitter) added to the kernel.
-        beta: Lengthscale-squared denominator in exp(-||ri - rj||^2 / beta).
-        T: Time horizon (number of transitions).
-        trials: Number of independent replications.
-        sigmas: Observation noise standard deviations.
-        seed: Seed for the random number generator.
+    Parameters
+    ----------
+    d : int
+        State dimension (must be a perfect square, d = n^2).
+    alpha : float
+        Scalar linear dynamics coefficient in x_t = alpha * x_{t-1} + v_t.
+    alpha0 : float
+        Amplitude for the squared–exponential kernel.
+    alpha1 : float
+        Nugget (diagonal jitter) added to the kernel.
+    beta : float
+        Lengthscale-squared denominator in exp(-||ri - rj||^2 / beta).
+    T : int
+        Time horizon (number of transitions).
+    trials : int
+        Number of independent replications.
+    sigmas : tuple of float
+        Observation noise standard deviations.
+    seed : int
+        Seed for the random number generator.
     """
 
     d: int = 64
@@ -68,10 +78,14 @@ def make_grid_coords(d: int) -> Array:
     range from 0 to n-1, which is translation-invariant for distance
     computation.
 
-    Args:
-        d: State dimension, a perfect square.
+    Parameters
+    ----------
+    d : int
+        State dimension, a perfect square.
 
-    Returns:
+    Returns
+    -------
+    ndarray
         Array of shape (d, 2) with [x, y] grid coordinates.
     """
     n = int(np.sqrt(d))
@@ -85,13 +99,20 @@ def se_kernel_cov(coords: Array, alpha0: float, beta: float, alpha1: float) -> A
 
     Sigma_ij = alpha0 * exp(-||ri - rj||^2 / beta) + alpha1 * 1{i=j}
 
-    Args:
-        coords: (d, 2) grid coordinates.
-        alpha0: Kernel amplitude.
-        beta: Lengthscale-squared denominator in the exponent.
-        alpha1: Diagonal nugget added for stability.
+    Parameters
+    ----------
+    coords : ndarray
+        (d, 2) grid coordinates.
+    alpha0 : float
+        Kernel amplitude.
+    beta : float
+        Lengthscale-squared denominator in the exponent.
+    alpha1 : float
+        Diagonal nugget added for stability.
 
-    Returns:
+    Returns
+    -------
+    ndarray
         Symmetric positive definite (d, d) covariance matrix.
     """
     diff = coords[:, None, :] - coords[None, :, :]
@@ -106,16 +127,24 @@ def se_kernel_cov(coords: Array, alpha0: float, beta: float, alpha1: float) -> A
 def cholesky_with_jitter(S: Array, max_tries: int = 5, base_jitter: float = 1e-10) -> Array:
     """Compute a Cholesky factor with progressively increasing jitter if needed.
 
-    Args:
-        S: Symmetric matrix intended to be SPD.
-        max_tries: Maximum number of jitter attempts.
-        base_jitter: Initial jitter magnitude.
+    Parameters
+    ----------
+    S : ndarray
+        Symmetric matrix intended to be SPD.
+    max_tries : int, optional
+        Maximum number of jitter attempts. Default is 5.
+    base_jitter : float, optional
+        Initial jitter magnitude. Default is 1e-10.
 
-    Returns:
+    Returns
+    -------
+    ndarray
         Lower-triangular Cholesky factor L such that L @ L.T ≈ S.
 
-    Raises:
-        np.linalg.LinAlgError: If factorization fails after max_tries.
+    Raises
+    ------
+    np.linalg.LinAlgError
+        If factorization fails after max_tries.
     """
     jitter = 0.0
     for i in range(max_tries):
@@ -134,10 +163,14 @@ def simulate_dataset(cfg: SimConfig) -> Tuple[Array, Array, Array, Array]:
         x_t = alpha x_{t-1} + v_t,        v_t ~ N(0, Sigma)
         z_t = x_t + w_t,                  w_t ~ N(0, sigma_z^2 I)
 
-    Args:
-        cfg: Simulation configuration.
+    Parameters
+    ----------
+    cfg : SimConfig
+        Simulation configuration.
 
-    Returns:
+    Returns
+    -------
+    tuple of ndarray
         Tuple ``(X, Z, coords, Sigma)`` with shapes:
             - X: (S, R, T+1, d), latent states including x0
             - Z: (S, R, T,   d), observations
@@ -182,13 +215,20 @@ def save_npz(
 ) -> None:
     """Save dataset arrays and metadata to a compressed .npz file.
 
-    Args:
-        path: Output file path for the .npz.
-        X: Latent states, shape (S, R, T+1, d).
-        Z: Observations, shape (S, R, T, d).
-        coords: Grid coordinates, shape (d, 2).
-        Sigma: Process covariance, shape (d, d).
-        cfg: Configuration used to generate the data.
+    Parameters
+    ----------
+    path: str
+        Output file path for the .npz.
+    X: Array
+        Latent states, shape (S, R, T+1, d).
+    Z: Array
+        Observations, shape (S, R, T, d).
+    coords: Array
+        Grid coordinates, shape (d, 2).
+    Sigma: Array
+        Process covariance, shape (d, d).
+    cfg: SimConfig
+        Configuration used to generate the data.
     """
     np.savez_compressed(
         path,
@@ -208,9 +248,10 @@ def save_npz(
 def dump_config_json(path: str, cfg: SimConfig) -> None:
     """Write the simulation configuration to a JSON file.
 
-    Args:
-        path: Output file path for the JSON.
-        cfg: Configuration to serialize.
+    Parameters
+    ----------
+    path: Output file path for the JSON.
+    cfg: Configuration to serialize.
     """
     with open(path, "w", encoding="utf-8") as f:
         json.dump(asdict(cfg), f, indent=2)

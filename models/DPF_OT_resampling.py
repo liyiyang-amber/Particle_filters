@@ -1,18 +1,24 @@
+"""
+Differentiable Particle Filter with OT-based Resampling
+"""
+
 import tensorflow as tf
 
-
-# ============================================
 # Utility: pairwise squared distances
-# ============================================
 def pairwise_squared_distances(x, y):
     """Compute pairwise squared Euclidean distances between two sets of points.
 
-    Args:
-        x (Tensor): Points of shape [N, d].
-        y (Tensor): Points of shape [M, d].
+    Parameters
+    ----------
+    x : Tensor
+        Points of shape [N, d].
+    y : Tensor
+        Points of shape [M, d].
 
-    Returns:
-        Tensor: Distance matrix of shape [N, M] where dist[i, j] = ||x[i] - y[j]||^2.
+    Returns
+    -------
+    Tensor
+        Distance matrix of shape [N, M] where dist[i, j] = ||x[i] - y[j]||^2.
     """
     x = tf.convert_to_tensor(x)
     y = tf.convert_to_tensor(y)
@@ -25,9 +31,8 @@ def pairwise_squared_distances(x, y):
     return tf.maximum(dist, 0.0)
 
 
-# ============================================
+
 # Sinkhorn OT resampling (entropy-regularized, dual formulation)
-# ============================================
 def tau_epsilon(a, f, C_vec, epsilon, min_val=1e-12):
     """Compute the tau operator for dual Sinkhorn.
 
@@ -35,15 +40,23 @@ def tau_epsilon(a, f, C_vec, epsilon, min_val=1e-12):
 
     This is the c-transform used in dual Sinkhorn iterations.
 
-    Args:
-        a (Tensor): Source/target mass distribution of shape [N].
-        f (Tensor): Dual variable of shape [N].
-        C_vec (Tensor): Row or column of cost matrix of shape [N].
-        epsilon (float): Regularization parameter.
-        min_val (float, optional): Small constant for numerical stability. Defaults to 1e-12.
+    Parameters
+    ----------
+    a : Tensor
+        Source/target mass distribution of shape [N].
+    f : Tensor
+        Dual variable of shape [N].
+    C_vec : Tensor
+        Row or column of cost matrix of shape [N].
+    epsilon : float
+        Regularization parameter.
+    min_val : float, optional
+        Small constant for numerical stability. Default is 1e-12.
 
-    Returns:
-        Tensor: Scalar tau value.
+    Returns
+    -------
+    Tensor
+        Scalar tau value.
     """
     # Compute: -eps * log(sum_k a_k * exp((f_k - C_vec_k) / eps))
     # Use log-sum-exp trick for numerical stability
@@ -79,20 +92,29 @@ def sinkhorn_ot_resample(particles,
         - DPF formulation: P_ij = (w_i / N) * exp((f_i + g_j - C_ij) / eps)
         These are mathematically IDENTICAL since a_i = w_i and b_j = 1/N
 
-    Args:
-        particles (Tensor): Current particles of shape [N, d].
-        weights (Tensor): Normalized weights of shape [N] (sum = 1).
-        epsilon (float, optional): Regularization strength for entropic OT. Defaults to 0.1.
-        n_iters (int, optional): Number of Sinkhorn iterations. Defaults to 50.
-        min_val (float, optional): Small constant for numerical stability. Defaults to 1e-12.
-        tol (float, optional): Convergence tolerance for stopping criterion. Defaults to 1e-6.
-        return_diagnostics (bool, optional): If True, return diagnostic information.
-            Defaults to False.
+    Parameters
+    ----------
+    particles : Tensor
+        Current particles of shape [N, d].
+    weights : Tensor
+        Normalized weights of shape [N] (sum = 1).
+    epsilon : float, optional
+        Regularization strength for entropic OT. Default is 0.1.
+    n_iters : int, optional
+        Number of Sinkhorn iterations. Default is 50.
+    min_val : float, optional
+        Small constant for numerical stability. Default is 1e-12.
+    tol : float, optional
+        Convergence tolerance for stopping criterion. Default is 1e-6.
+    return_diagnostics : bool, optional
+        If True, return diagnostic information. Default is False.
 
-    Returns:
-        Tuple: If return_diagnostics is False, returns (new_particles, new_weights).
-            new_particles has shape [N, d], new_weights has shape [N] (uniform, 1/N each).
-            If return_diagnostics is True, also returns diagnostics dict as third element.
+    Returns
+    -------
+    tuple
+        If return_diagnostics is False, returns (new_particles, new_weights).
+        new_particles has shape [N, d], new_weights has shape [N] (uniform, 1/N each).
+        If return_diagnostics is True, returns (new_particles, new_weights, diagnostics dict).
     """
     particles = tf.convert_to_tensor(particles, dtype=tf.float32)
     weights = tf.convert_to_tensor(weights, dtype=tf.float32)
@@ -158,19 +180,6 @@ def sinkhorn_ot_resample(particles,
             if f_change < tol and g_change < tol:
                 break
 
-    # Recover the regularized optimal transport matrix from dual variables
-    # Two equivalent formulations:
-    # 
-    # 1. Standard OT formulation: P_ij = a_i * b_j * exp((f_i + g_j - C_ij) / eps)
-    #    where a = weights, b = 1/N
-    #    This gives: P_ij = w_i * (1/N) * exp((f_i + g_j - C_ij) / eps)
-    # 
-    # 2. DPF resampling formulation: P_ij = (w_i / N) * exp((f_i + g_j - C_ij) / eps)
-    #    This is mathematically identical to formulation 1
-    #
-    # Both satisfy:
-    #   - Row constraint: sum_j P_ij = w_i (source marginals)
-    #   - Column constraint: sum_i P_ij = 1/N (target marginals)
     
     f_expanded = f[:, None]  # [N, 1]
     g_expanded = g[None, :]  # [1, N]
@@ -225,9 +234,7 @@ def sinkhorn_ot_resample(particles,
     return new_particles, new_weights
 
 
-# ============================================
 # Differentiable Particle Filter with OT resampling
-# ============================================
 class DPF_OT(tf.Module):
     """Differentiable Particle Filter with Optimal Transport resampling.
 
@@ -245,15 +252,22 @@ class DPF_OT(tf.Module):
                  name=None):
         """Initialize the Differentiable Particle Filter with OT resampling.
 
-        Args:
-            N_particles (int): Number of particles N.
-            state_dim (int): Dimensionality of state space d.
-            transition_fn (callable): State transition function (particles, t) -> new_particles.
-            obs_loglik_fn (callable): Observation log-likelihood function
-                (particles, y_t, t) -> log_liks of shape [N].
-            epsilon (float, optional): Entropy regularization for OT. Defaults to 0.1.
-            sinkhorn_iters (int, optional): Number of Sinkhorn iterations. Defaults to 50.
-            name (str, optional): Name for the module. Defaults to None.
+        Parameters
+        ----------
+        N_particles : int
+            Number of particles N.
+        state_dim : int
+            Dimensionality of state space d.
+        transition_fn : callable
+            State transition function (particles, t) -> new_particles.
+        obs_loglik_fn : callable
+            Observation log-likelihood function (particles, y_t, t) -> log_liks of shape [N].
+        epsilon : float, optional
+            Entropy regularization for OT. Default is 0.1.
+        sinkhorn_iters : int, optional
+            Number of Sinkhorn iterations. Default is 50.
+        name : str, optional
+            Name for the module. Default is None.
         """
         super().__init__(name=name)
         self.N = N_particles
@@ -263,20 +277,23 @@ class DPF_OT(tf.Module):
         self.epsilon = epsilon
         self.sinkhorn_iters = sinkhorn_iters
     
-    # ------------------------------------------------------------------
+
     # Utility functions for diagnostics
-    # ------------------------------------------------------------------
     @staticmethod
     def compute_ess(weights):
         """Compute Effective Sample Size (ESS) from weights.
 
         ESS = 1 / sum(w_i^2)
 
-        Args:
-            weights (Tensor): Normalized weights of shape (N,) or (B, N).
+        Parameters
+        ----------
+        weights : Tensor
+            Normalized weights of shape (N,) or (B, N).
 
-        Returns:
-            Tensor: Scalar or (B,) Effective Sample Size.
+        Returns
+        -------
+        Tensor
+            Scalar or (B,) Effective Sample Size.
         """
         # Ensure weights are normalized
         if weights.shape.rank == 1:
@@ -293,11 +310,15 @@ class DPF_OT(tf.Module):
 
         H(w) = -sum(w_i * log(w_i))
 
-        Args:
-            weights (Tensor): Normalized weights of shape (N,) or (B, N).
+        Parameters
+        ----------
+        weights : Tensor
+            Normalized weights of shape (N,) or (B, N).
 
-        Returns:
-            Tensor: Scalar or (B,) entropy.
+        Returns
+        -------
+        Tensor
+            Scalar or (B,) entropy.
         """
         weights = weights / (tf.reduce_sum(weights, axis=-1, keepdims=True) + 1e-12)
         entropy = -tf.reduce_sum(weights * tf.math.log(weights + 1e-10), axis=-1)
@@ -307,12 +328,16 @@ class DPF_OT(tf.Module):
     def compute_particle_diversity(particles):
         """Compute particle diversity metrics.
 
-        Args:
-            particles (Tensor): Particle states of shape (N, d) or (B, N, d).
+        Parameters
+        ----------
+        particles : Tensor
+            Particle states of shape (N, d) or (B, N, d).
 
-        Returns:
-            dict: Dictionary with diversity metrics including 'mean_pairwise_dist'
-                and 'particle_spread'.
+        Returns
+        -------
+        dict
+            Dictionary with diversity metrics including 'mean_pairwise_dist'
+            and 'particle_spread'.
         """
         if particles.shape.rank == 2:
             # Add batch dimension
@@ -349,12 +374,17 @@ class DPF_OT(tf.Module):
     def init_particles(self, mean, cov_chol):
         """Initialize particles from a Gaussian N(mean, cov).
 
-        Args:
-            mean (Tensor): Mean vector of shape [d].
-            cov_chol (Tensor): Cholesky factor of covariance of shape [d, d].
+        Parameters
+        ----------
+        mean : Tensor
+            Mean vector of shape [d].
+        cov_chol : Tensor
+            Cholesky factor of covariance of shape [d, d].
 
-        Returns:
-            Tuple[Tensor, Tensor]: Particles of shape [N, d] and uniform weights of shape [N].
+        Returns
+        -------
+        tuple of Tensor
+            Particles of shape [N, d] and uniform weights of shape [N].
         """
         mean = tf.convert_to_tensor(mean, dtype=tf.float32)
         cov_chol = tf.convert_to_tensor(cov_chol, dtype=tf.float32)
@@ -370,18 +400,25 @@ class DPF_OT(tf.Module):
     def step(self, particles, weights, y_t, t=None, return_diagnostics=False):
         """Perform one step of the DPF with OT resampling.
 
-        Args:
-            particles (Tensor): Particles of shape [N, d].
-            weights (Tensor): Weights of shape [N].
-            y_t (Tensor): Observation at time t (shape user-defined).
-            t (int, optional): Time index. Defaults to None.
-            return_diagnostics (bool, optional): If True, return diagnostic metrics.
-                Defaults to False.
+        Parameters
+        ----------
+        particles : Tensor
+            Particles of shape [N, d].
+        weights : Tensor
+            Weights of shape [N].
+        y_t : Tensor
+            Observation at time t (shape user-defined).
+        t : int, optional
+            Time index. Default is None.
+        return_diagnostics : bool, optional
+            If True, return diagnostic metrics. Default is False.
 
-        Returns:
-            Tuple: If return_diagnostics is False, returns (new_particles, new_weights).
-                new_particles has shape [N, d], new_weights has shape [N].
-                If return_diagnostics is True, also returns diagnostics dict as third element.
+        Returns
+        -------
+        tuple
+            If return_diagnostics is False, returns (new_particles, new_weights).
+            new_particles has shape [N, d], new_weights has shape [N].
+            If return_diagnostics is True, also returns diagnostics dict as third element.
         """
         # Compute diagnostics before resampling (if requested)
         if return_diagnostics:
@@ -452,20 +489,26 @@ class DPF_OT(tf.Module):
     def run_filter(self, y_seq, mean0, cov0_chol, return_diagnostics=False, ground_truth=None):
         """Run the DPF over a sequence of observations.
 
-        Args:
-            y_seq (list or Tensor): Sequence of observations [T, ...].
-            mean0 (Tensor): Initial mean of shape [d].
-            cov0_chol (Tensor): Initial covariance Cholesky factor of shape [d, d].
-            return_diagnostics (bool, optional): If True, return detailed diagnostic metrics.
-                Defaults to False.
-            ground_truth (Tensor, optional): True states of shape [T+1, d] for computing RMSE.
-                Defaults to None.
+        Parameters
+        ----------
+        y_seq : list or Tensor
+            Sequence of observations [T, ...].
+        mean0 : Tensor
+            Initial mean of shape [d].
+        cov0_chol : Tensor
+            Initial covariance Cholesky factor of shape [d, d].
+        return_diagnostics : bool, optional
+            If True, return detailed diagnostic metrics. Default is False.
+        ground_truth : Tensor, optional
+            True states of shape [T+1, d] for computing RMSE. Default is None.
 
-        Returns:
-            Tuple: If return_diagnostics is False, returns (particles_seq, weights_seq).
-                particles_seq is a list of length T with tensors [N, d],
-                weights_seq is a list of length T with tensors [N].
-                If return_diagnostics is True, also returns diagnostics dict as third element.
+        Returns
+        -------
+        tuple
+            If return_diagnostics is False, returns (particles_seq, weights_seq).
+            particles_seq is a list of length T with tensors [N, d],
+            weights_seq is a list of length T with tensors [N].
+            If return_diagnostics is True, also returns diagnostics dict as third element.
         """
         particles, weights = self.init_particles(mean0, cov0_chol)
         particles_seq = []
@@ -515,11 +558,15 @@ class DPF_OT(tf.Module):
     def _aggregate_diagnostics(self, diagnostics_list):
         """Aggregate per-timestep diagnostics into summary statistics.
 
-        Args:
-            diagnostics_list (list): List of diagnostic dictionaries from each timestep.
+        Parameters
+        ----------
+        diagnostics_list : list
+            List of diagnostic dictionaries from each timestep.
 
-        Returns:
-            dict: Aggregated statistics with mean, std, min, and max values.
+        Returns
+        -------
+        dict
+            Aggregated statistics with mean, std, min, and max values.
         """
         if not diagnostics_list:
             return {}
@@ -556,13 +603,19 @@ class DPF_OT(tf.Module):
     def _compute_rmse_sequence(self, particles_seq, weights_seq, ground_truth):
         """Compute RMSE at each timestep between weighted particle mean and ground truth.
 
-        Args:
-            particles_seq (list): List of particle tensors of shape [N, d].
-            weights_seq (list): List of weight tensors of shape [N].
-            ground_truth (Tensor): True state sequence of shape [T+1, d] (includes t=0).
+        Parameters
+        ----------
+        particles_seq: list 
+            List of particle tensors of shape [N, d].
+        weights_seq: list
+            List of weight tensors of shape [N].
+        ground_truth: Tensor
+            True state sequence of shape [T+1, d] (includes t=0).
 
-        Returns:
-            Tensor: RMSE at each timestep, shape [T].
+        Returns
+        ----------
+        Tensor
+            RMSE at each timestep, shape [T].
         """
         rmse_list = []
         

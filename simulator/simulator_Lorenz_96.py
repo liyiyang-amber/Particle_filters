@@ -31,10 +31,7 @@ from numpy.typing import NDArray
 Array = NDArray[np.floating]
 
 
-# ---------------------------------------------------------------------
 # Core Lorenz 96 dynamics functions
-# ---------------------------------------------------------------------
-
 def l96_rhs(x: Array, F: float = 8.0) -> Array:
     """
     Compute the right-hand side of the Lorenz 96 equations.
@@ -131,16 +128,13 @@ def l96_integrate(
     return traj
 
 
-# ---------------------------------------------------------------------
 # Observation model
-# ---------------------------------------------------------------------
-
 @dataclass
 class ObsModel:
     """
     Linear observation model for partial state observation.
     
-    Attributes
+    Parameters
     ----------
     H_idx : ndarray of shape (ny,)
         Indices of observed state variables.
@@ -187,16 +181,13 @@ class ObsModel:
         return J
 
 
-# ---------------------------------------------------------------------
 # Simulation result container
-# ---------------------------------------------------------------------
-
 @dataclass
 class Lorenz96SimulationResult:
     """
     Container for Lorenz 96 simulation data.
     
-    Attributes
+    Parameters
     ----------
     truth_traj : ndarray of shape (T+1, nx)
         Ground truth trajectory.
@@ -304,10 +295,7 @@ class Lorenz96SimulationResult:
         )
 
 
-# ---------------------------------------------------------------------
 # Main simulation function
-# ---------------------------------------------------------------------
-
 def simulate_lorenz96(
     nx: int = 1000,
     F: float = 8.0,
@@ -448,10 +436,7 @@ def simulate_lorenz96(
     )
 
 
-# ---------------------------------------------------------------------
 # Utility functions
-# ---------------------------------------------------------------------
-
 def compute_rmse(forecast: Array, truth: Array) -> float:
     """
     Compute root mean square error between forecast and truth.

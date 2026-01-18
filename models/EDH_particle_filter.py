@@ -1,3 +1,6 @@
+""""
+EKF/UKF-assisted EDH Particle-Flow Particle Filter (EDH-PF) implementation.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -5,8 +8,6 @@ from typing import Callable, Optional, Protocol, Tuple, Union
 import numpy as np
 
 Array = np.ndarray
-
-# ----------------------------- Protocols ---------------------------------
 
 class GaussianTracker(Protocol):
     """Auxiliary EKF/UKF that supplies (m, P) and carries them forward."""
@@ -23,8 +24,8 @@ JacobianHFn = Callable[[Array], Array]                            # x->\partial 
 LogTransPdf = Callable[[Array, Array], float]                     # log p(x_k|x_{k-1})
 LogLikePdf  = Callable[[Array, Array], float]                     # log p(z_k|x_k)
 
-# ----------------------------- Utils -------------------------------------
 
+# Utilities
 def rk4_step(x: Array, f: Callable[[Array], Array], dt: float) -> Array:
     """One RK4 step for x' = f(x)."""
     k1 = f(x)
@@ -53,8 +54,7 @@ def effective_sample_size(weights: Array) -> float:
     w = weights / np.sum(weights)
     return 1.0 / float(np.sum(w * w))
 
-# ----------------------------- Config/State -------------------------------
-
+# Config/State 
 @dataclass
 class EDHConfig:
     """Configuration for EKF/UKF-assisted EDH-PF."""
@@ -73,8 +73,7 @@ class PFState:
     cov: Array                               # (nx, nx)
     diagnostics: dict = None                 # optional flow diagnostics (e.g., condition numbers)
 
-# ----------------------------- Tracker Wrappers ---------------------------
-
+# Tracker Wrappers 
 class EKFTracker:
     """Wrapper for ExtendedKalmanFilter to match GaussianTracker protocol."""
     
@@ -132,8 +131,7 @@ class UKFTracker:
         """Return \hat{x}_{k-1|k-1}."""
         return self.past_mean
 
-# ----------------------------- EDH Flow PF --------------------------------
-
+# EDH Flow PF 
 class EDHFlowPF:
     """EKF/UKF-assisted EDH particle-flow particle filter."""
 
@@ -171,8 +169,7 @@ class EDHFlowPF:
         self.R = np.array(R, dtype=float)
         self.cfg = config or EDHConfig()
 
-    # ----------------------------- API ----------------------------------
-
+    # API
     def init_from_gaussian(self, mean0: Array, cov0: Array) -> PFState:
         """Sample initial particles from N(mean0, cov0) with equal weights."""
         n, nx = self.cfg.n_particles, mean0.size
@@ -190,24 +187,16 @@ class EDHFlowPF:
         process_noise_sampler: Optional[Callable[[int, int], Array]] = None,
     ) -> PFState:
         """
-        Run one EDH-PF step following the pseudocode.
-        
-        Steps:
-        1. EKF/UKF prediction: (\hat{x}_{k-1|k-1}, P_{k-1|k-1}) -> (m_{k|k-1}, P_{k|k-1})
-        2. Propagate particles: \eta_0^i = g(x_{k-1}^i, v)
-        3. Flow update in pseudo-time \lambda \in [0,1]
-        4. Weight update with ratio: w \propto w_{k-1} \cdot p(x_k|x_{k-1}) \cdot p(z_k|x_k) / p(\eta_0|x_{k-1})
-        5. EKF/UKF measurement update: (m_{k|k-1}, P_{k|k-1}) -> (m_{k|k}, P_{k|k})
-        6. Optional resampling
+        Run one EDH-PF step.
         """
         N, nx = state.particles.shape
 
-        # --- EKF/UKF prediction: (m_{k|k-1}, P_{k|k-1}) ---
+        # EKF/UKF prediction: (m_{k|k-1}, P_{k|k-1}) 
         m_pred, P = self.tracker.predict()
         # Enforce symmetry on P
         P = 0.5 * (P + P.T)
 
-        # --- Propagate particles to η_0^i = g(x_{k-1}^i, v) ---
+        # Propagate particles to η_0^i = g(x_{k-1}^i, v) 
         if process_noise_sampler is None:
             # Default: zero process noise (caller should provide proper sampler)
             v = np.zeros((N, nx))
@@ -218,12 +207,12 @@ class EDHFlowPF:
         for i in range(N):
             eta0[i] = self.g(state.particles[i], u_km1, v[i])
 
-        # --- Initialize flow states η_1^i <- η_0^i, \bar{\eta} <- \bar{\eta}_0 ---
+        # Initialize flow states η_1^i <- η_0^i, \bar{\eta} <- \bar{\eta}_0 
         eta = eta0.copy()  # η_1^i
         # Compute mean trajectory initialization: \bar{\eta}_0 = g_k(\hat{x}_{k-1}, 0)
         etabar = self.g(self.tracker.get_past_mean(), u_km1, np.zeros(nx))
         
-        # --- Flow update in pseudo-time \lambda \in [0,1] ---
+        # Flow update in pseudo-time \lambda \in [0,1]
         n_steps = max(1, int(self.cfg.n_lambda_steps))
         dlam = 1.0 / float(n_steps)  # \epsilon_j
         lam = 0.0
@@ -253,7 +242,7 @@ class EDHFlowPF:
             except:
                 cond_numbers.append(np.nan)
             
-            # Use solves for numerical stability (avoid explicit inverses)
+            # Use solves for numerical stability 
             # A(\lambda) = -1/2 P H^T S^{-1} H
             try:
                 S_inv_H = np.linalg.solve(S, H)  # Solve S * X = H for X
@@ -290,7 +279,7 @@ class EDHFlowPF:
                     eta[i] = rk4_step(eta[i], field, dlam)
                 etabar = rk4_step(etabar, field, dlam)
 
-        # Posterior correction (weight update) ---
+        # Posterior correction (weight update) 
         xk = eta  # x_k^i <- \eta_1^i
 
         # Compute weights (log domain for numerical stability)
@@ -308,10 +297,10 @@ class EDHFlowPF:
         w = np.exp(logw)
         w /= np.sum(w)
 
-        # --- EKF/UKF measurement update (tracker only) ---
+        # EKF/UKF measurement update (tracker only) 
         self.tracker.update(z_k)
 
-        # --- Optional resampling based on ESS ---
+        # Optional resampling based on ESS 
         if self.cfg.resample_ess_ratio > 0.0:
             ess = effective_sample_size(w)
             if ess < self.cfg.resample_ess_ratio * N:
@@ -319,7 +308,7 @@ class EDHFlowPF:
                 xk = xk[idx]
                 w = np.full_like(w, 1.0 / N)
 
-        # --- Estimate mean and covariance ---
+        # Estimate mean and covariance
         mean, cov = self._weighted_stats(xk, w)
         
         # Package diagnostics
@@ -327,8 +316,7 @@ class EDHFlowPF:
         
         return PFState(particles=xk, weights=w, mean=mean, cov=cov, diagnostics=diagnostics)
 
-    # ----------------------------- helpers --------------------------------
-
+    # helpers 
     @staticmethod
     def _weighted_stats(x: Array, w: Array) -> Tuple[Array, Array]:
         """Weighted mean/covariance with symmetry enforcement."""

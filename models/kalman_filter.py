@@ -1,3 +1,6 @@
+"""
+Kalman filter implementation.
+"""
 from dataclasses import dataclass
 from typing import Optional, Sequence, Tuple, Union
 import numpy as np
@@ -9,7 +12,7 @@ Array = NDArray[np.float64]
 class KFResults:
     """Outputs of the general Kalman filter.
 
-    Attributes
+    Parameters
     ----------
     x_pred : ndarray, shape (N, nx)
         Predicted (prior) state means, \hat{x}_k^-.

@@ -1,8 +1,5 @@
 """
 Unscented Kalman Filter (UKF) 
-
-This module implements a standard additive-noise UKF. It also includes a helper to load
-pre-simulated datasets (X, Y) from a .npz file.
 """
 
 from __future__ import annotations
@@ -18,17 +15,19 @@ GFn = Callable[[Array, Optional[Array]], Array]
 HFn = Callable[[Array], Array]
 
 
-# ---------------------------------------------------------------------
 # State container
-# ---------------------------------------------------------------------
 @dataclass
 class UKFState:
     """Container for UKF posterior state.
 
-    Attributes:
-        mean (np.ndarray): Posterior mean of shape (nx,).
-        cov (np.ndarray): Posterior covariance of shape (nx, nx).
-        t (int): Discrete time index of this posterior.
+    Parameters
+    ----------
+    mean : np.ndarray
+        Posterior mean of shape (nx,).
+    cov : np.ndarray
+        Posterior covariance of shape (nx, nx).
+    t : int
+        Discrete time index of this posterior.
     """
 
     mean: Array
@@ -36,9 +35,7 @@ class UKFState:
     t: int
 
 
-# ---------------------------------------------------------------------
 # Core UKF
-# ---------------------------------------------------------------------
 class UnscentedKalmanFilter:
     """Unscented Kalman Filter for additive Gaussian noises.
 
@@ -48,15 +45,24 @@ class UnscentedKalmanFilter:
 
     This class implements the UKF using 2*nx+1 sigma points.
 
-    Args:
-        g: Process/motion function g(x, u) -> (nx,).
-        h: Measurement function h(x) -> (nz,).
-        Q: Process noise covariance (nx, nx).
-        R: Measurement noise covariance (nz, nz).
-        alpha: Primary spread parameter in (0, 1]; typical 1e-3 or 0.1.
-        beta: Incorporates prior knowledge of distribution (2 for Gaussian).
-        kappa: Secondary spread parameter (often 0 or 3-nx).
-        jitter: Small diagonal added to covariance matrices before Cholesky.
+    Parameters
+    ----------
+    g : callable
+        Process/motion function g(x, u) -> (nx,).
+    h : callable
+        Measurement function h(x) -> (nz,).
+    Q : ndarray
+        Process noise covariance (nx, nx).
+    R : ndarray
+        Measurement noise covariance (nz, nz).
+    alpha : float, optional
+        Primary spread parameter in (0, 1]. Default is 1e-3 or 0.1.
+    beta : float, optional
+        Prior knowledge parameter (2 for Gaussian). Default is 2.0.
+    kappa : float, optional
+        Secondary spread parameter (often 0 or 3-nx). Default is 0.0.
+    jitter : float, optional
+        Small diagonal added to covariance matrices before Cholesky. Default is 0.0.
     """
 
     def __init__(
@@ -97,8 +103,7 @@ class UnscentedKalmanFilter:
         self.Wm = wm
         self.Wc = wc
 
-    # ------------------------- helpers -------------------------
-
+    # helpers
     def _sigma_points(self, mean: Array, cov: Array) -> Array:
         """Construct sigma points around a Gaussian (mean, cov)."""
         mean = np.asarray(mean, float)
@@ -120,17 +125,20 @@ class UnscentedKalmanFilter:
             X[i + 1 + self.nx] = mean - col
         return X
 
-    # ------------------------- core UKF ops -------------------------
-
+    # core UKF ops 
     def predict(self, state: UKFState, u: Optional[Array] = None) -> UKFState:
         """Run the UKF prediction step (unscented transform through g).
 
-        Args:
-            state: Previous posterior state.
-            u: Optional control input u_{k-1}.
+        Parameters
+        ----------
+        state
+            Previous posterior state.
+        u
+            Optional control input u_{k-1}.
 
-        Returns:
-            Predicted state UKFState(mean= x_{k|k-1}, cov= P_{k|k-1}, t= state.t + 1).
+        Returns
+        -------
+        Predicted state UKFState(mean= x_{k|k-1}, cov= P_{k|k-1}, t= state.t + 1).
         """
         X = self._sigma_points(state.mean, state.cov)
         X_prop = np.array([self.g(xi, u) for xi in X])
@@ -146,12 +154,14 @@ class UnscentedKalmanFilter:
     def update(self, pred: UKFState, z: Array) -> UKFState:
         """Run the UKF measurement update (unscented transform through h).
 
-        Args:
-            pred: Predicted state from `predict`.
-            z: Measurement vector z_k of shape (nz,).
+        Parameters
+        ----------
+        pred: Predicted state from `predict`.
+        z: Measurement vector z_k of shape (nz,).
 
-        Returns:
-            Posterior state UKFState(mean= x_{k|k}, cov= P_{k|k}, t= pred.t).
+        Returns
+        -------
+        Posterior state UKFState(mean= x_{k|k}, cov= P_{k|k}, t= pred.t).
         """
         X = self._sigma_points(pred.mean, pred.cov)
         Z = np.array([self.h(xi) for xi in X])

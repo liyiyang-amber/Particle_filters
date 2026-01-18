@@ -22,19 +22,24 @@ GFn = Callable[[Array, Optional[Array]], Array]
 HFn = Callable[[Array], Array]
 
 
-# ---------------------------------------------------------------------
+
 # State container
-# ---------------------------------------------------------------------
 @dataclass
 class PFState:
     """Container for Particle Filter posterior state.
 
-    Attributes:
-        particles (np.ndarray): Particle states (Np, nx).
-        weights (np.ndarray): Normalized weights (Np,).
-        mean (np.ndarray): Weighted posterior mean (nx,).
-        cov (np.ndarray): Weighted posterior covariance (nx, nx).
-        t (int): Discrete time index.
+    Parameters
+    ----------
+    particles : np.ndarray
+        Particle states (Np, nx).
+    weights : np.ndarray
+        Normalized weights (Np,).
+    mean : np.ndarray
+        Weighted posterior mean (nx,).
+    cov : np.ndarray
+        Weighted posterior covariance (nx, nx).
+    t : int
+        Discrete time index.
     """
 
     particles: Array
@@ -44,22 +49,31 @@ class PFState:
     t: int
 
 
-# ---------------------------------------------------------------------
 # Particle Filter implementation
-# ---------------------------------------------------------------------
 class ParticleFilter:
     """SIR Particle Filter with resampling and regularization.
 
-    Args:
-        g: State transition function g(x, u) → (nx,).
-        h: Measurement function h(x) → (nz,).
-        Q: Process noise covariance (nx, nx).
-        R: Measurement noise covariance (nz, nz).
-        Np: Number of particles.
-        resample_thresh: Fraction of Np triggering resample when Neff drops below.
-        resample_method: 'systematic' or 'multinomial'.
-        regularize_after_resample: Add small jitter after resampling to mitigate particle impoverishment.
-        rng: Optional numpy random Generator.
+    Parameters
+    ----------
+    g : callable
+        State transition function g(x, u) → (nx,).
+    h : callable
+        Measurement function h(x) → (nz,).
+    Q : ndarray
+        Process noise covariance (nx, nx).
+    R : ndarray
+        Measurement noise covariance (nz, nz).
+    Np : int, optional
+        Number of particles. Default is 1000.
+    resample_thresh : float, optional
+        Fraction of Np triggering resample when Neff drops below. Default is 0.5.
+    resample_method : str, optional
+        Resampling method: 'systematic' or 'multinomial'. Default is 'systematic'.
+    regularize_after_resample : bool, optional
+        If True, add small jitter after resampling to mitigate particle impoverishment.
+        Default is False.
+    rng : np.random.Generator, optional
+        Numpy random Generator. Default is None (uses default generator).
     """
 
     def __init__(
@@ -92,11 +106,22 @@ class ParticleFilter:
         # Precompute Cholesky of R
         self.LR = np.linalg.cholesky(self.R + 1e-12 * np.eye(self.nz))
 
-    # -----------------------------------------------------------------
     # Initialization and resampling
-    # -----------------------------------------------------------------
     def initialize(self, mean: Array, cov: Array) -> PFState:
-        """Initialize particles from a Gaussian N(mean, cov)."""
+        """Initialize particles from a Gaussian N(mean, cov).
+
+        Parameters
+        ----------
+        mean : ndarray
+            Mean vector of shape (nx,).
+        cov : ndarray
+            Covariance matrix of shape (nx, nx).
+
+        Returns
+        -------
+        PFState
+            Filter posterior state with initialized particles.
+        """
         mean = np.asarray(mean, float)
         cov = np.asarray(cov, float)
         Lc = np.linalg.cholesky(cov + 1e-10 * np.eye(len(mean)))
@@ -107,13 +132,30 @@ class ParticleFilter:
         return self.state
 
     def effective_sample_size(self) -> float:
-        """Return current effective sample size Neff."""
+        """Return current effective sample size Neff.
+
+        Returns
+        -------
+        float
+            Effective sample size.
+        """
         assert self.state is not None, "Filter not initialized."
         w = self.state.weights
         return 1.0 / np.sum(w ** 2)
 
     def _systematic_resample(self, weights: Array) -> Array:
-        """Perform systematic resampling."""
+        """Perform systematic resampling.
+
+        Parameters
+        ----------
+        weights : ndarray
+            Particle weights of shape (Np,).
+
+        Returns
+        -------
+        ndarray
+            Resampled particle indices.
+        """
         N = len(weights)
         positions = (self.rng.random() + np.arange(N)) / N
         indexes = np.zeros(N, dtype=int)
@@ -129,11 +171,35 @@ class ParticleFilter:
         return indexes
 
     def _multinomial_resample(self, weights: Array) -> Array:
-        """Perform multinomial resampling."""
+        """Perform multinomial resampling.
+
+        Parameters
+        ----------
+        weights : ndarray
+            Particle weights of shape (Np,).
+
+        Returns
+        -------
+        ndarray
+            Resampled particle indices.
+        """
         return self.rng.choice(len(weights), size=len(weights), p=weights)
 
     def _resample(self, particles: Array, weights: Array) -> Tuple[Array, Array]:
-        """Resample particles when degeneracy threshold reached."""
+        """Resample particles when degeneracy threshold reached.
+
+        Parameters
+        ----------
+        particles : ndarray
+            Current particle states of shape (Np, nx).
+        weights : ndarray
+            Current particle weights of shape (Np,).
+
+        Returns
+        -------
+        tuple of ndarray
+            Resampled particles and normalized weights.
+        """
         Neff = 1.0 / np.sum(weights ** 2)
         if Neff < self.resample_thresh * self.Np:
             if self.resample_method == "systematic":
@@ -153,11 +219,15 @@ class ParticleFilter:
 
         return particles, weights
 
-    # -----------------------------------------------------------------
     # Core filtering steps
-    # -----------------------------------------------------------------
     def predict(self, u: Optional[Array] = None) -> None:
-        """Propagate particles through the transition model."""
+        """Propagate particles through the transition model.
+
+        Parameters
+        ----------
+        u : ndarray, optional
+            Control input. Default is None.
+        """
         assert self.state is not None, "Filter not initialized."
         try:
             Lq = np.linalg.cholesky(self.Q)
@@ -167,7 +237,18 @@ class ParticleFilter:
         self.state.particles = np.array([self.g(x, u) for x in self.state.particles]) + noise
 
     def update(self, z: Array) -> PFState:
-        """Update particle weights given measurement z."""
+        """Update particle weights given measurement z.
+
+        Parameters
+        ----------
+        z : ndarray
+            Measurement of shape (nz,).
+
+        Returns
+        -------
+        PFState
+            Updated filter state.
+        """
         assert self.state is not None, "Filter not initialized."
         z = np.asarray(z, float)
         particles = self.state.particles
@@ -188,6 +269,19 @@ class ParticleFilter:
         return self.state
 
     def step(self, z: Array, u: Optional[Array] = None) -> PFState:
-        """Run one PF step (predict then update)."""
+        """Run one PF step (predict then update).
+
+        Parameters
+        ----------
+        z : ndarray
+            Measurement of shape (nz,).
+        u : ndarray, optional
+            Control input. Default is None.
+
+        Returns
+        -------
+        PFState
+            Updated filter state.
+        """
         self.predict(u)
         return self.update(z)

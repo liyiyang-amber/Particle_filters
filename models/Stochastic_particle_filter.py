@@ -1,3 +1,6 @@
+"""
+Stochastic Particle Filter (SPF) with generalized homotopy methods.
+"""
 import numpy as np
 from dataclasses import dataclass
 from typing import Optional, Tuple, Literal
@@ -5,9 +8,7 @@ from typing import Optional, Tuple, Literal
 Array = np.ndarray
 
 
-# -----------------------------
 # Linear-Gaussian model helpers
-# -----------------------------
 @dataclass
 class LinearGaussianBayes:
     """Linear-Gaussian Bayesian model for filtering.
@@ -16,12 +17,18 @@ class LinearGaussianBayes:
     - Prior: x ~ N(m0, P0)
     - Likelihood: z | x ~ N(H x, R)
 
-    Attributes:
-        m0 (Array): Prior mean vector of shape (n,).
-        P0 (Array): Prior covariance matrix of shape (n, n), symmetric positive definite.
-        H (Array): Observation matrix of shape (d, n).
-        R (Array): Observation noise covariance of shape (d, d), symmetric positive definite.
-        z (Array): Observation vector of shape (d,).
+    Parameters
+    ----------
+        m0: Array
+            Prior mean vector of shape (n,).
+        P0: Array
+            Prior covariance matrix of shape (n, n), symmetric positive definite.
+        H: Array
+            Observation matrix of shape (d, n).
+        R: Array
+            Observation noise covariance of shape (d, d), symmetric positive definite.
+        z: Array
+            Observation vector of shape (d,).
     """
     m0: Array          # (n,)
     P0: Array          # (n,n) SPD
@@ -69,30 +76,39 @@ class LinearGaussianBayes:
     def grad_log_p0(self, x: Array) -> Array:
         """Compute gradient of log prior density.
 
-        Args:
-            x (Array): State vector of shape (n,).
+        Parameters
+        ----------
+        x: Array
+            State vector of shape (n,).
 
-        Returns:
-            Array: Gradient ∇ log p0 = -P0^{-1} (x - m0).
+        Returns
+        ----------
+        Array
+            Gradient ∇ log p0 = -P0^{-1} (x - m0).
         """
         return -self.P0_inv @ (x - self.m0)
 
     def grad_log_h(self, x: Array) -> Array:
         """Compute gradient of log likelihood.
 
-        Args:
-            x (Array): State vector of shape (n,).
+        Parameters
+        ----------
+        x: Array
+            State vector of shape (n,).
 
-        Returns:
-            Array: Gradient ∇ log h = H^T R^{-1} (z - Hx).
+        Returns
+        ----------
+        Array
+            Gradient ∇ log h = H^T R^{-1} (z - Hx).
         """
         return self.H.T @ (self.R_inv @ (self.z - self.H @ x))
 
     def kalman_posterior(self) -> Tuple[Array, Array]:
         """Compute analytic Kalman posterior mean and covariance.
 
-        Returns:
-            Tuple[Array, Array]: Posterior mean m_post and covariance P_post.
+        Returns
+        Tuple[Array, Array]
+            Posterior mean m_post and covariance P_post.
         """
         S = self.H @ self.P0 @ self.H.T + self.R
         K = self.P0 @ self.H.T @ np.linalg.solve(S, np.eye(self.d))
@@ -102,24 +118,24 @@ class LinearGaussianBayes:
         return m_post, P_post
 
 
-# ---------------------------------------
+
 # Condition number kappa_2(M) and its derivative
-# ---------------------------------------
 def kappa2_and_derivative(M: Array, dM_dbeta: Array, eps: float = 1e-12) -> Tuple[float, float]:
     """Compute spectral condition number and its derivative.
 
-    Computes kappa2(M) = lambda_max/lambda_min for symmetric positive definite M,
-    and its derivative with respect to beta:
-    dkappa/dbeta = (dlambda_max/dbeta)/lambda_min - lambda_max/lambda_min^2 * (dlambda_min/dbeta),
-    where dlambda/dbeta = v^T (dM/dbeta) v for symmetric matrices.
+    Parameters
+    ----------
+    M: Array
+        Symmetric positive definite matrix of shape (n, n).
+    dM_dbeta: Array
+        Derivative of M with respect to beta, shape (n, n).
+    eps: float, optional
+        Regularization parameter for numerical stability. Defaults to 1e-12.
 
-    Args:
-        M (Array): Symmetric positive definite matrix of shape (n, n).
-        dM_dbeta (Array): Derivative of M with respect to beta, shape (n, n).
-        eps (float, optional): Regularization parameter for numerical stability. Defaults to 1e-12.
-
-    Returns:
-        Tuple[float, float]: Condition number kappa and its derivative dkappa/dbeta.
+    Returns
+    ----------
+    Tuple[float, float]
+        Condition number kappa and its derivative dkappa/dbeta.
     """
     # Ensure symmetry
     M = 0.5 * (M + M.T)
@@ -151,9 +167,7 @@ def kappa2_and_derivative(M: Array, dM_dbeta: Array, eps: float = 1e-12) -> Tupl
     return kappa, dkappa
 
 
-# --------------------------
 # Solve optimal beta_(lambda)
-# --------------------------
 def solve_beta_star_bisection(
     M0: Array,
     Mh: Array,
@@ -166,26 +180,30 @@ def solve_beta_star_bisection(
 ) -> Tuple[Array, Array, Array]:
     """Solve optimal beta schedule using shooting method and bisection.
 
-    Solves the ODE beta'' = mu * dkappa/dbeta with boundary conditions:
-    beta(0) = 0, beta'(0) = s (unknown), target beta(1) = 1.
-
-    The ODE is autonomous in beta for the linear-Gaussian case because
-    M(beta) = M0 + beta*Mh, so dkappa/dbeta depends only on beta.
-
-    Args:
-        M0 (Array): Initial precision matrix of shape (n, n).
-        Mh (Array): Likelihood contribution to precision, shape (n, n).
-        mu (float): Regularization parameter controlling path smoothness.
-        n_grid (int, optional): Number of grid points. Defaults to 501.
-        s_lo (float, optional): Lower bound for shooting parameter. Defaults to -5.0.
-        s_hi (float, optional): Upper bound for shooting parameter. Defaults to 5.0.
+    Parameters
+    ----------
+    M0: Array
+        Initial precision matrix of shape (n, n).
+    Mh: Array
+        Likelihood contribution to precision, shape (n, n).
+    mu: float
+        Regularization parameter controlling path smoothness.
+    n_grid: int, optional
+        Number of grid points. Defaults to 501.
+    s_lo: float, optional
+        Lower bound for shooting parameter. Defaults to -5.0.
+    s_hi: float, optional
+        Upper bound for shooting parameter. Defaults to 5.0.
         max_bracket_expand (int, optional): Maximum bracket expansions. Defaults to 30.
         max_bisect_iter (int, optional): Maximum bisection iterations. Defaults to 60.
 
-    Returns:
-        Tuple[Array, Array, Array]: Arrays of lambda grid, beta values, and beta derivatives.
+    Returns
+    ----------
+    Tuple[Array, Array, Array]
+        Arrays of lambda grid, beta values, and beta derivatives.
 
-    Raises:
+    Raises
+    ----------
         RuntimeError: If root bracketing fails.
     """
     M0 = 0.5 * (M0 + M0.T)
@@ -278,9 +296,7 @@ def solve_beta_star_bisection(
     return lam, beta, betadot
 
 
-# -------------------------
 # Generalized SPF (normalized)
-# -------------------------
 def run_generalized_spf(
     model: LinearGaussianBayes,
     N: int = 2000,
@@ -293,28 +309,26 @@ def run_generalized_spf(
 ) -> Tuple[Array, Array, dict]:
     """Run generalized Stochastic Particle Filter with normalized homotopy.
 
-    Implements normalized homotopy with alpha + beta = 1 (alpha = 1 - beta),
-    using the theorem-based drift:
-        f = K1 ∇log p + K2 ∇log h
-    where:
-        S = ∇^2 log p = ∇^2 log p0 + beta ∇^2 log h
-        K2 = -beta' S^{-1}  (under normalization alpha + beta = 1)
-        K1 = 1/2 Q + (beta'/2) S^{-1} (∇^2 log h) S^{-1}  (because alpha' + beta' = 0)
-
-    Args:
-        model (LinearGaussianBayes): Linear-Gaussian model specification.
-        N (int, optional): Number of particles. Defaults to 2000.
-        n_steps (int, optional): Number of time steps for homotopy. Defaults to 300.
-        beta_mode (Literal["linear", "optimal"], optional): Beta schedule mode.
-            Defaults to "optimal".
-        mu (float, optional): Smoothness parameter for optimal beta. Defaults to 1e-2.
-        Q_mode (Literal["scaled_identity", "inv_M"], optional): Diffusion covariance mode.
-            Defaults to "inv_M".
+    Parameters
+    ----------
+    model (LinearGaussianBayes):
+        Linear-Gaussian model specification.
+    N: int, optional
+        Number of particles. Defaults to 2000.
+    n_steps: int, optional
+        Number of time steps for homotopy. Defaults to 300.
+    beta_mode (Literal["linear", "optimal"], optional): Beta schedule mode.
+        Defaults to "optimal".
+    mu (float, optional): Smoothness parameter for optimal beta. Defaults to 1e-2.
+    Q_mode (Literal["scaled_identity", "inv_M"], optional): Diffusion covariance mode.
+        Defaults to "inv_M".
         q_scale (float, optional): Scale for scaled_identity mode. Defaults to 1e-2.
         seed (int, optional): Random seed for reproducibility. Defaults to 0.
 
-    Returns:
-        Tuple[Array, Array, dict]: Final particle positions (N, n), mean estimate (n,),
+    Returns
+    ----------
+    Tuple[Array, Array, dict]
+        Final particle positions (N, n), mean estimate (n,),
             and info dict containing lambda, beta, and betadot grids.
     """
     rng = np.random.default_rng(seed)

@@ -5,20 +5,6 @@ This module provides a vectorized simulator for generating
 multi-target trajectories under constant-velocity (CV) dynamics and their
 acoustic sensor measurements. 
 
-Main features
--------------
-- CV dynamics with additive Gaussian process noise.
-- Process noise covariance `V` and initial states `X0`.
-- Acoustic measurement model: per-sensor amplitude is the sum of attenuated
-  contributions from all targets:  z_s = sum_c Psi / (||p_c - r_s||^2 + d0).
-- Rectangular sensor grid over a rectangular area.
-- Reproducible random sampling.
-
-Usage
------
-- Import functions and call `simulate_acoustic_dataset`.
-- Or run as a script to generate an example NPZ and quick sanity plots.
-
 Outputs
 -------
 - X: (T, C, 4) target states [x, y, vx, vy].
@@ -39,16 +25,15 @@ import matplotlib.pyplot as plt
 Array = np.ndarray
 
 
-# -----------------------------------------------------------------------------
 # Configuration dataclasses
-# -----------------------------------------------------------------------------
-
 @dataclass(frozen=True)
 class DynamicsConfig:
     """Configuration for 2D constant-velocity dynamics.
 
-    Attributes:
-        dt: Time step (seconds).
+    Parameters
+    ----------
+    dt : float
+        Time step (seconds).
     """
 
     dt: float = 1.0
@@ -58,15 +43,24 @@ class DynamicsConfig:
 class ScenarioConfig:
     """High-level scenario configuration for multi-target acoustic simulation.
 
-    Attributes:
-        n_targets: Number of targets (article uses 4).
-        n_steps: Number of time steps to simulate (including k=0).
-        area_xy: Tuple (width, height) in meters for a rectangular area.
-        sensor_grid_shape: (rows, cols) for a rectangular sensor grid.
-        psi: Source amplitude constant in the acoustic model.
-        d0: Small positive offset to avoid singularity in amplitude model.
-        seed: Random generator seed for reproducibility.
-        use_article_init: If True and n_targets == 4, use the article's X0 states.
+    Parameters
+    ----------
+    n_targets : int
+        Number of targets (article uses 4).
+    n_steps : int
+        Number of time steps to simulate (including k=0).
+    area_xy : tuple of float
+        Tuple (width, height) in meters for a rectangular area.
+    sensor_grid_shape : tuple of int
+        (rows, cols) for a rectangular sensor grid.
+    psi : float
+        Source amplitude constant in the acoustic model.
+    d0 : float
+        Small positive offset to avoid singularity in amplitude model.
+    seed : int
+        Random generator seed for reproducibility.
+    use_article_init : bool
+        If True and n_targets == 4, use the article's X0 states.
     """
 
     n_targets: int = 4
@@ -79,20 +73,21 @@ class ScenarioConfig:
     use_article_init: bool = True
 
 
-# -----------------------------------------------------------------------------
 # Core linear algebra for CV model
-# -----------------------------------------------------------------------------
-
 def build_cv_transition(dt: float) -> Array:
     """Create the constant-velocity state transition matrix `F`.
 
     The state is [x, y, vx, vy].
 
-    Args:
-        dt: Time step in seconds.
+    Parameters
+    ----------
+    dt : float
+        Time step in seconds.
 
-    Returns:
-        F: A (4, 4) numpy array representing the state transition.
+    Returns
+    -------
+    ndarray
+        A (4, 4) numpy array representing the state transition.
     """
     F = np.array(
         [
@@ -114,8 +109,11 @@ def article_process_noise_cov() -> Array:
                       [0,   1/3, 0,   0.5],
                       [0.5, 0,   1,   0  ],
                       [0,   0.5, 0,   1  ]]
-    Returns:
-        V: A (4, 4) numpy array.
+
+    Returns
+    -------
+    ndarray
+        A (4, 4) numpy array.
     """
     V = (1.0 / 20.0) * np.array(
         [
@@ -138,14 +136,20 @@ def article_initial_states(n_targets: int) -> Array:
         [20,  13, -0.1,    0.01 ],
         [15,  35,  0.002,  0.002]
 
-    Args:
-        n_targets: Number of targets; must be 4 to use this initialization.
+    Parameters
+    ----------
+    n_targets : int
+        Number of targets; must be 4 to use this initialization.
 
-    Returns:
-        X0: A (4, 4) array of initial states.
+    Returns
+    -------
+    ndarray
+        A (4, 4) array of initial states.
 
-    Raises:
-        ValueError: If n_targets is not 4.
+    Raises
+    ------
+    ValueError
+        If n_targets is not 4.
     """
     if n_targets != 4:
         raise ValueError("Article initial states are defined for n_targets == 4.")
@@ -161,21 +165,23 @@ def article_initial_states(n_targets: int) -> Array:
     return X0
 
 
-# -----------------------------------------------------------------------------
 # Scenario utilities
-# -----------------------------------------------------------------------------
-
 def make_sensor_grid(area_xy: Tuple[float, float], grid_shape: Tuple[int, int]) -> Array:
     """Create a rectangular grid of sensor locations over the area.
 
     Sensors lie on grid intersections (inclusive of boundaries).
 
-    Args:
-        area_xy: Tuple (width, height) of the rectangle in meters.
-        grid_shape: Tuple (rows, cols) for the grid.
+    Parameters
+    ----------
+    area_xy: Tuple 
+        (width, height) of the rectangle in meters.
+    grid_shape: Tuple 
+        (rows, cols) for the grid.
 
-    Returns:
-        sensors: A (S, 2) array of sensor xy-locations.
+    Returns
+    -------
+    ndarray
+        sensors A (S, 2) array of sensor xy-locations.
     """
     width, height = area_xy
     n_r, n_c = grid_shape
@@ -186,10 +192,7 @@ def make_sensor_grid(area_xy: Tuple[float, float], grid_shape: Tuple[int, int]) 
     return sensors
 
 
-# -----------------------------------------------------------------------------
 # Simulation routines
-# -----------------------------------------------------------------------------
-
 def simulate_cv_targets(
     n_steps: int,
     n_targets: int,
@@ -202,10 +205,8 @@ def simulate_cv_targets(
 ) -> Array:
     """Simulate constant-velocity target trajectories with article-exact noise.
 
-    Target positions are constrained to stay within the sensor coverage area
-    using a reflecting boundary condition (velocity reversal at boundaries).
-
-    Args:
+    Parameters
+    ----------
         n_steps: Number of time steps to simulate (including step 0).
         n_targets: Number of targets.
         area_xy: Tuple (width, height) defining the tracking area bounds.
@@ -218,7 +219,8 @@ def simulate_cv_targets(
         enforce_boundaries: If True, reflect targets at boundaries to keep them
             within the area. Default True.
 
-    Returns:
+    Returns
+    -------
         X: A (n_steps, n_targets, 4) array of states [x, y, vx, vy].
     """
     F = build_cv_transition(dyn_cfg.dt)
@@ -278,10 +280,8 @@ def acoustic_measurement_model(
 ) -> Array:
     """Compute additive acoustic amplitudes at sensors from multiple targets.
 
-    The noiseless amplitude at sensor `s` is:
-        zbar_s = sum_c psi / (||p_c - r_s||^2 + d0)
-
-    Args:
+    Parameters
+    ----------
         positions: Array (T, C, 2) of target xy positions.
         sensors: Array (S, 2) of sensor xy locations.
         psi: Source amplitude constant.
@@ -289,7 +289,8 @@ def acoustic_measurement_model(
         # rng: Optional RNG for additive Gaussian noise.
         # noise_std: Sensor noise standard deviation.
 
-    Returns:
+    Returns
+    -------
         Z: Array (T, S) of measurements.
     """
     T, C = positions.shape[:2]
@@ -310,22 +311,20 @@ def acoustic_measurement_model(
 
 def simulate_acoustic_dataset(cfg: ScenarioConfig, dyn_cfg: DynamicsConfig) -> Dict[str, Array]:
     """Simulate a complete multi-target acoustic dataset.
-    
-    Targets are constrained to remain within the sensor coverage area using
-    reflecting boundary conditions. This ensures all measurements are valid
-    and targets stay within the observable region.
 
-    Args:
-        cfg: Scenario configuration.
-        dyn_cfg: Dynamics configuration.
+    Parameters
+    ----------
+    cfg: Scenario configuration.
+    dyn_cfg: Dynamics configuration.
 
-    Returns:
-        A dictionary with keys:
-            - "X": (T, C, 4) states [x, y, vx, vy].
-            - "P": (T, C, 2) positions [x, y].
-            - "S": (S, 2) sensor locations.
-            - "Z": (T, S) noiseless sensor measurements.
-            - "meta": small array with [W, H, psi, d0, dt].
+    Returns
+    -------
+    A dictionary with keys:
+        - "X": (T, C, 4) states [x, y, vx, vy].
+        - "P": (T, C, 2) positions [x, y].
+        - "S": (S, 2) sensor locations.
+        - "Z": (T, S) noiseless sensor measurements.
+        - "meta": small array with [W, H, psi, d0, dt].
     """
     rng = np.random.default_rng(cfg.seed)
     sensors = make_sensor_grid(cfg.area_xy, cfg.sensor_grid_shape)

@@ -1,3 +1,6 @@
+"""
+Differentiable Particle Filter with soft Resampling
+"""
 import numpy as np
 import tensorflow as tf
 
@@ -21,18 +24,26 @@ class DifferentiableParticleFilter(tf.Module):
     ):
         """Initialize the Differentiable Particle Filter.
 
-        Args:
-            n_particles (int): Number of particles N.
-            state_dim (int): Dimension of latent state.
-            transition_fn (callable): State transition function (x_prev, params) -> x_pred.
-                x_prev has shape (B, N, state_dim), returns shape (B, N, state_dim).
-            log_likelihood_fn (callable): Log-likelihood function (x, y, params) -> log p(y | x).
-                x has shape (B, N, state_dim), y has shape (B, obs_dim), returns shape (B, N).
-            soft_alpha (float, optional): Mixing parameter in [0,1] for mixture with uniform,
-                q = (1 - alpha) * w + alpha * 1/N. Defaults to 0.1.
-            gumbel_temperature (float, optional): Temperature for Gumbel-Softmax.
-                Smaller values create harder assignments. Defaults to 0.2.
-            name (str, optional): Name for the module. Defaults to None.
+        Parameters
+        ----------
+        n_particles : int
+            Number of particles N.
+        state_dim : int
+            Dimension of latent state.
+        transition_fn : callable
+            State transition function (x_prev, params) -> x_pred.
+            x_prev has shape (B, N, state_dim), returns shape (B, N, state_dim).
+        log_likelihood_fn : callable
+            Log-likelihood function (x, y, params) -> log p(y | x).
+            x has shape (B, N, state_dim), y has shape (B, obs_dim), returns shape (B, N).
+        soft_alpha : float, optional
+            Mixing parameter in [0,1] for mixture with uniform,
+            q = (1 - alpha) * w + alpha * 1/N. Default is 0.1.
+        gumbel_temperature : float, optional
+            Temperature for Gumbel-Softmax.
+            Smaller values create harder assignments. Default is 0.2.
+        name : str, optional
+            Name for the module. Default is None.
         """
         super().__init__(name=name)
         self.n_particles = n_particles
@@ -42,20 +53,26 @@ class DifferentiableParticleFilter(tf.Module):
         self.soft_alpha = soft_alpha
         self.gumbel_temperature = gumbel_temperature
 
-    # ------------------------------------------------------------------
+    
     # Utilities
-    # ------------------------------------------------------------------
+    
     @staticmethod
     def _log_normalize(log_w, axis=-1, keepdims=False):
         """Normalize log-weights along given axis.
 
-        Args:
-            log_w (Tensor): Log-weights to normalize.
-            axis (int, optional): Axis along which to normalize. Defaults to -1.
-            keepdims (bool, optional): Whether to keep dimensions. Defaults to False.
+        Parameters
+        ----------
+        log_w : Tensor
+            Log-weights to normalize.
+        axis : int, optional
+            Axis along which to normalize. Default is -1.
+        keepdims : bool, optional
+            Whether to keep dimensions. Default is False.
 
-        Returns:
-            Tuple[Tensor, Tensor]: Normalized log-weights and log normalization constant.
+        Returns
+        -------
+        tuple of Tensor
+            Normalized log-weights and log normalization constant.
         """
         log_z = tf.reduce_logsumexp(log_w, axis=axis, keepdims=True)
         log_w_norm = log_w - log_z
@@ -67,17 +84,15 @@ class DifferentiableParticleFilter(tf.Module):
     def compute_ess(log_weights):
         """Compute Effective Sample Size (ESS) from log-weights.
 
-        ESS measures the quality of particle approximation: ESS = 1 / sum(w_i^2),
-        where w_i are normalized weights.
+        Parameters
+        ----------
+        log_weights : Tensor
+            Log-weights of shape (B, N).
 
-        Args:
-            log_weights (Tensor): Log-weights of shape (B, N).
-
-        Returns:
-            Tensor: Effective Sample Size for each batch, shape (B,).
-                Range: [1, N] where N is number of particles.
-                ESS ≈ N indicates equal weights (good),
-                ESS ≈ 1 indicates one particle dominates (bad, degeneracy).
+        Returns
+        -------
+        Tensor
+            Effective Sample Size for each batch, shape (B,).
         """
         # Normalize weights
         weights = tf.exp(log_weights)  # (B, N)
@@ -91,14 +106,15 @@ class DifferentiableParticleFilter(tf.Module):
     def compute_weight_entropy(log_weights):
         """Compute entropy of weight distribution.
 
-        Computes H(w) = -sum(w_i * log(w_i)).
-        Higher entropy indicates more uniform weights (better particle diversity).
+        Parameters
+        ----------
+        log_weights : Tensor
+            Log-weights of shape (B, N).
 
-        Args:
-            log_weights (Tensor): Log-weights of shape (B, N).
-
-        Returns:
-            Tensor: Entropy for each batch, shape (B,).
+        Returns
+        -------
+        Tensor
+            Entropy for each batch, shape (B,).
         """
         weights = tf.exp(log_weights)  # (B, N)
         weights = weights / tf.reduce_sum(weights, axis=-1, keepdims=True)
@@ -111,11 +127,15 @@ class DifferentiableParticleFilter(tf.Module):
     def compute_particle_diversity(particles):
         """Compute particle diversity metrics.
 
-        Args:
-            particles (Tensor): Particle states of shape (B, N, d).
+        Parameters
+        ----------
+        particles : Tensor
+            Particle states of shape (B, N, d).
 
-        Returns:
-            dict: Dictionary containing diversity metrics:
+        Returns
+        -------
+        dict
+            Dictionary containing diversity metrics:
                 - 'mean_pairwise_dist': Mean distance between particles.
                 - 'std_pairwise_dist': Standard deviation of pairwise distances.
                 - 'particle_spread': Trace of covariance matrix.
@@ -156,12 +176,17 @@ class DifferentiableParticleFilter(tf.Module):
     def _sample_gumbel(shape, eps=1e-20):
         """Sample i.i.d. Gumbel(0,1) variables.
 
-        Args:
-            shape (tuple): Shape of the output tensor.
-            eps (float, optional): Small constant for numerical stability. Defaults to 1e-20.
+        Parameters
+        ----------
+        shape: tuple
+            Shape of the output tensor.
+        eps: float, optional
+            Small constant for numerical stability. Defaults to 1e-20.
 
-        Returns:
-            Tensor: Gumbel(0,1) samples of specified shape.
+        Returns
+        -------
+        Tensor
+            Gumbel(0,1) samples of specified shape.
         """
         u = tf.random.uniform(shape, minval=eps, maxval=1.0 - eps)
         return -tf.math.log(-tf.math.log(u))
@@ -169,12 +194,17 @@ class DifferentiableParticleFilter(tf.Module):
     def _gumbel_softmax(self, log_probs, temperature):
         """Gumbel-Softmax sample given log-probabilities.
 
-        Args:
-            log_probs (Tensor): Log probabilities of shape (..., K), unnormalized is OK.
-            temperature (float): Scalar temperature > 0.
+        Parameters
+        ----------
+        log_probs: Tensor
+            Log probabilities of shape (..., K), unnormalized is OK.
+        temperature: float
+            Scalar temperature > 0.
 
-        Returns:
-            Tensor: Soft one-hot vectors of shape (..., K).
+        Returns
+        -------
+        Tensor 
+            Soft one-hot vectors of shape (..., K).
         """
         g = self._sample_gumbel(tf.shape(log_probs))
         y = tf.nn.softmax((log_probs + g) / temperature, axis=-1)
@@ -186,15 +216,20 @@ class DifferentiableParticleFilter(tf.Module):
     def init_particles(self, batch_size, init_mean, init_cov_chol):
         """Initialize particles from a Gaussian prior N(init_mean, init_cov).
 
-        Args:
-            batch_size (int): Number of parallel sequences B.
-            init_mean (Tensor): Prior mean of shape (state_dim,) or (B, state_dim).
-            init_cov_chol (Tensor): Lower Cholesky factor of prior covariance,
-                shape (state_dim, state_dim) or (B, state_dim, state_dim).
+        Parameters
+        ----------
+        batch_size : int
+            Number of parallel sequences B.
+        init_mean : Tensor
+            Prior mean of shape (state_dim,) or (B, state_dim).
+        init_cov_chol : Tensor
+            Lower Cholesky factor of prior covariance,
+            shape (state_dim, state_dim) or (B, state_dim, state_dim).
 
-        Returns:
-            Tuple[Tensor, Tensor]: Particles of shape (B, N, state_dim) and
-                log-weights of shape (B, N).
+        Returns
+        -------
+        tuple of Tensor
+            Particles of shape (B, N, state_dim) and log-weights of shape (B, N).
         """
         N, d = self.n_particles, self.state_dim
 
@@ -225,23 +260,31 @@ class DifferentiableParticleFilter(tf.Module):
         )
         return particles, log_weights
 
-    # ------------------------------------------------------------------
+    
     # Single filtering step
-    # ------------------------------------------------------------------
+    
     def step(self, particles, log_weights, observation, params=None, return_diagnostics=False):
         """Perform one step of the differentiable particle filter.
 
-        Args:
-            particles (Tensor): Previous particle states of shape (B, N, d).
-            log_weights (Tensor): Previous log weights of shape (B, N).
-            observation (Tensor): Current observation of shape (B, obs_dim).
-            params (dict, optional): Parameters passed to transition and likelihood functions.
-                Defaults to None.
-            return_diagnostics (bool, optional): If True, return diagnostic metrics.
-                Defaults to False.
+        Parameters
+        ----------
+        particles: Tensor
+            Previous particle states of shape (B, N, d).
+        log_weights: Tensor
+            Previous log weights of shape (B, N).
+        observation: Tensor
+            Current observation of shape (B, obs_dim).
+        params: dict, optional
+            Parameters passed to transition and likelihood functions.
+            Defaults to None.
+        return_diagnostics: bool, optional
+            If True, return diagnostic metrics.
+            Defaults to False.
 
-        Returns:
-            Tuple: If return_diagnostics is False, returns (new_particles, new_log_weights).
+        Returns
+        -------
+        Tuple
+            If return_diagnostics is False, returns (new_particles, new_log_weights).
                 new_particles has shape (B, N, d), new_log_weights has shape (B, N).
                 If return_diagnostics is True, also returns diagnostics dict as third element.
         """
@@ -265,7 +308,6 @@ class DifferentiableParticleFilter(tf.Module):
 
         # 3) Soft-resampling with mixture with uniform
         # q = (1 - alpha) * w + alpha * 1/N
-        # This mixture prevents complete weight degeneracy while maintaining differentiability
         alpha = self.soft_alpha
         N = self.n_particles
         uniform = tf.fill(tf.shape(weights), 1.0 / N)
@@ -277,7 +319,7 @@ class DifferentiableParticleFilter(tf.Module):
         # For each new particle i = 1..N, we want a (soft) ancestor distribution
         # We let every new particle use the same base distribution log_probs,
         # but add *independent* Gumbel noise per i.
-        #
+        
         # Shape: (B, N, N) where last dim indexes 'ancestor j'
         log_probs_expanded = tf.expand_dims(log_probs, axis=1)  # (B,1,N)
         log_probs_tiled = tf.tile(log_probs_expanded, [1, N, 1])  # (B,N,N)
@@ -324,28 +366,36 @@ class DifferentiableParticleFilter(tf.Module):
 
         return new_particles, new_log_weights
 
-    # ------------------------------------------------------------------
+    
     # Full filtering over a sequence
-    # ------------------------------------------------------------------
     def filter(self, observations, init_mean, init_cov_chol, params=None, 
                return_diagnostics=False, ground_truth=None):
         """Run differentiable particle filter over a sequence of observations.
 
-        Args:
-            observations (Tensor): Observation sequence of shape (B, T, obs_dim).
-            init_mean (Tensor): Initial prior mean, see init_particles.
-            init_cov_chol (Tensor): Initial prior covariance Cholesky factor, see init_particles.
-            params (dict, optional): Parameters for transition and likelihood functions.
+        Parameters
+        ----------
+        observations: Tensor
+            Observation sequence of shape (B, T, obs_dim).
+        init_mean: Tensor
+            Initial prior mean, see init_particles.
+        init_cov_chol: Tensor
+            Initial prior covariance Cholesky factor, see init_particles.
+        params: dict, optional
+            Parameters for transition and likelihood functions.
                 Can be static or contain time-dependent tensors. Defaults to None.
-            return_diagnostics (bool, optional): If True, return detailed diagnostic metrics.
+        return_diagnostics: bool, optional
+            If True, return detailed diagnostic metrics.
                 Defaults to False.
-            ground_truth (Tensor, optional): True states of shape (B, T+1, state_dim)
+        ground_truth: Tensor, optional
+            True states of shape (B, T+1, state_dim)
                 for computing RMSE. Defaults to None.
 
-        Returns:
-            Tuple: If return_diagnostics is False, returns (particles_seq, logw_seq).
+        Returns
+        -------
+        Tuple
+            If return_diagnostics is False, returns (particles_seq, logw_seq).
                 particles_seq has shape (B, T+1, N, d), logw_seq has shape (B, T+1, N).
-                If return_diagnostics is True, also returns diagnostics dict as third element.
+            If return_diagnostics is True, also returns diagnostics dict as third element.
         """
         if params is None:
             params = {}
@@ -416,11 +466,15 @@ class DifferentiableParticleFilter(tf.Module):
     def _aggregate_diagnostics(self, diagnostics_list):
         """Aggregate per-timestep diagnostics into summary statistics.
 
-        Args:
-            diagnostics_list (list): List of diagnostic dictionaries from each timestep.
+        Parameters
+        ----------
+        diagnostics_list: list
+            List of diagnostic dictionaries from each timestep.
 
-        Returns:
-            dict: Aggregated statistics with mean, std, min, and max values.
+        Returns
+        -------
+        dict
+            Aggregated statistics with mean, std, min, and max values.
         """
         if not diagnostics_list:
             return {}
@@ -434,7 +488,7 @@ class DifferentiableParticleFilter(tf.Module):
             
             # Convert to tensor if not already
             if isinstance(values[0], dict):
-                # Handle nested dictionaries (like diversity metrics)
+                # Handle nested dictionaries 
                 aggregated[key] = {}
                 for subkey in values[0].keys():
                     subvalues = tf.stack([v[subkey] for v in values])
@@ -443,7 +497,7 @@ class DifferentiableParticleFilter(tf.Module):
                     aggregated[key][subkey + '_min'] = tf.reduce_min(subvalues)
                     aggregated[key][subkey + '_max'] = tf.reduce_max(subvalues)
             elif isinstance(values[0], (int, float)):
-                # Scalar values (like step_time)
+                # Scalar values 
                 aggregated[key + '_mean'] = sum(values) / len(values)
                 aggregated[key + '_std'] = tf.math.reduce_std(tf.constant(values))
             else:
@@ -459,13 +513,19 @@ class DifferentiableParticleFilter(tf.Module):
     def _compute_rmse_sequence(self, particles_seq, logw_seq, ground_truth):
         """Compute RMSE at each timestep between weighted particle mean and ground truth.
 
-        Args:
-            particles_seq (Tensor): Particle sequence of shape (B, T+1, N, d).
-            logw_seq (Tensor): Log-weight sequence of shape (B, T+1, N).
-            ground_truth (Tensor): True state sequence of shape (B, T+1, d).
+        Parameters
+        ----------
+        particles_seq: Tensor
+            Particle sequence of shape (B, T+1, N, d).
+        logw_seq: Tensor
+            Log-weight sequence of shape (B, T+1, N).
+        ground_truth: Tensor
+            True state sequence of shape (B, T+1, d).
 
-        Returns:
-            Tensor: RMSE at each timestep (averaged over batch), shape (T+1,).
+        Returns
+        -------
+        Tensor
+            RMSE at each timestep (averaged over batch), shape (T+1,).
         """
         # Compute weighted mean: sum_i w_i * x_i
         weights = tf.exp(logw_seq)  # (B, T+1, N)
@@ -494,57 +554,57 @@ class DifferentiableParticleFilter(tf.Module):
 # ----------------------------------------------------------------------
 
 
-def linear_gaussian_transition(x_prev, params):
-    """Linear-Gaussian state transition function.
+# def linear_gaussian_transition(x_prev, params):
+#     """Linear-Gaussian state transition function.
 
-    Args:
-        x_prev (Tensor): Previous states of shape (B, N, 1).
-        params (dict): Parameters containing:
-            - 'a': Transition coefficient, scalar or shape (B, 1, 1).
-            - 'sigma_q': Process noise standard deviation, scalar.
+#     Args:
+#         x_prev (Tensor): Previous states of shape (B, N, 1).
+#         params (dict): Parameters containing:
+#             - 'a': Transition coefficient, scalar or shape (B, 1, 1).
+#             - 'sigma_q': Process noise standard deviation, scalar.
 
-    Returns:
-        Tensor: Next states of shape (B, N, 1).
-    """
-    a = params.get("a", 0.9)
-    sigma_q = params.get("sigma_q", 0.5)
+#     Returns:
+#         Tensor: Next states of shape (B, N, 1).
+#     """
+#     a = params.get("a", 0.9)
+#     sigma_q = params.get("sigma_q", 0.5)
 
-    a = tf.convert_to_tensor(a, dtype=tf.float32)
-    sigma_q = tf.convert_to_tensor(sigma_q, dtype=tf.float32)
+#     a = tf.convert_to_tensor(a, dtype=tf.float32)
+#     sigma_q = tf.convert_to_tensor(sigma_q, dtype=tf.float32)
 
-    # Broadcast a and sigma_q
-    a = tf.reshape(a, (1, 1, 1))
-    sigma_q = tf.reshape(sigma_q, (1, 1, 1))
+#     # Broadcast a and sigma_q
+#     a = tf.reshape(a, (1, 1, 1))
+#     sigma_q = tf.reshape(sigma_q, (1, 1, 1))
 
-    eps = tf.random.normal(tf.shape(x_prev), dtype=tf.float32)
-    x_new = a * x_prev + sigma_q * eps
-    return x_new
+#     eps = tf.random.normal(tf.shape(x_prev), dtype=tf.float32)
+#     x_new = a * x_prev + sigma_q * eps
+#     return x_new
 
 
-def linear_gaussian_log_likelihood(x, y, params):
-    """Compute log-likelihood log p(y | x) for linear-Gaussian observation model.
+# def linear_gaussian_log_likelihood(x, y, params):
+#     """Compute log-likelihood log p(y | x) for linear-Gaussian observation model.
 
-    Assumes y = x + N(0, sigma_r^2).
+#     Assumes y = x + N(0, sigma_r^2).
 
-    Args:
-        x (Tensor): States of shape (B, N, 1).
-        y (Tensor): Observations of shape (B, 1).
-        params (dict): Parameters containing 'sigma_r' (observation noise std dev).
+#     Args:
+#         x (Tensor): States of shape (B, N, 1).
+#         y (Tensor): Observations of shape (B, 1).
+#         params (dict): Parameters containing 'sigma_r' (observation noise std dev).
 
-    Returns:
-        Tensor: Log-likelihoods of shape (B, N).
-    """
-    sigma_r = params.get("sigma_r", 0.5)
-    sigma_r = tf.convert_to_tensor(sigma_r, dtype=tf.float32)
+#     Returns:
+#         Tensor: Log-likelihoods of shape (B, N).
+#     """
+#     sigma_r = params.get("sigma_r", 0.5)
+#     sigma_r = tf.convert_to_tensor(sigma_r, dtype=tf.float32)
 
-    # Broadcast y to (B, N, 1)
-    y = tf.expand_dims(y, axis=1)  # (B,1,1)
-    y = tf.broadcast_to(y, tf.shape(x))  # (B,N,1)
+#     # Broadcast y to (B, N, 1)
+#     y = tf.expand_dims(y, axis=1)  # (B,1,1)
+#     y = tf.broadcast_to(y, tf.shape(x))  # (B,N,1)
 
-    diff = y - x
-    var = sigma_r ** 2
-    log_norm_const = -0.5 * tf.math.log(2.0 * np.pi * var)
-    log_lik = log_norm_const - 0.5 * (diff ** 2) / var  # (B,N,1)
-    return tf.squeeze(log_lik, axis=-1)  # (B,N)
+#     diff = y - x
+#     var = sigma_r ** 2
+#     log_norm_const = -0.5 * tf.math.log(2.0 * np.pi * var)
+#     log_lik = log_norm_const - 0.5 * (diff ** 2) / var  # (B,N,1)
+#     return tf.squeeze(log_lik, axis=-1)  # (B,N)
 
 
