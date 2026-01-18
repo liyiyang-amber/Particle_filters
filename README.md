@@ -236,7 +236,7 @@ This model is nonlinear and non-Gaussian in the observation equation, making it 
 
 ## 8. Stochastic Particle Flow (SPF)
 
-## 8.1 Motivation
+### 8.1 Motivation
 SPF performs the measurement update by tempering the likelihood over pseudo-time $\lambda\in[0,1]$, and adds diffusion to reduce particle collapse.
 
 Tempered posterior:
