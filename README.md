@@ -16,7 +16,7 @@ Recommended starting notebook: `notebooks/EKF_UKF_PF_comparison.ipynb`.
 
 ## 1. Abstract
 
-This repository provides a unified codebase illustrating the evolution of filtering methods: from classical Kalman filters (KF, EKF, UKF), to particle filters (PF), and further to particle-flow-based methods including deterministic flows (EDH/LEDH), kernel-embedded flows (KPF), and stochastic particle flow (SPF) variants. We also include differentiable particle filter (DPF) resampling strategies (soft, optimal transport, and learned/RNN-based). The motivation is to address the limitations of classical filters under strong nonlinearity and non-Gaussianity, the degeneracy of particle filters, and to showcase how particle flows provide continuous-time Bayes updates. The codebase includes implementations, benchmarks, visualizations, and stability diagnostics for a wide range of state-space models (SSMs).
+This repository provides a unified codebase illustrating the evolution of filtering methods: from classical Kalman filters (KF, EKF, UKF), to particle filters (PF), and further to particle-flow-based methods including deterministic flows (EDH/LEDH), kernel-embedded flows (KPF), and stochastic particle flow (SPF) variants. We also include differentiable particle filter (DPF) resampling strategies (soft, optimal transport, and learned/RNN-based), as well as gradient-based parameter inference via Hamiltonian Monte Carlo with DPF-OT (HMC+DPF-OT) and the gradient-free Particle Marginal Metropolis–Hastings (PMMH). The motivation is to address the limitations of classical filters under strong nonlinearity and non-Gaussianity, the degeneracy of particle filters, and to showcase how particle flows provide continuous-time Bayes updates. The codebase includes implementations, benchmarks, visualizations, and stability diagnostics for a wide range of state-space models (SSMs).
 
 The repository provides:
 - Implementations in `models/` and simulators in `simulator/`
@@ -26,7 +26,7 @@ The repository provides:
 ## 2. Repository Structure
 
 ```
-/models/                 # Filter implementations (KF,EKF,UKF,PF,EDH,LEDH,KPF,SPF,DPF)
+/models/                 # Filter & inference implementations (KF,EKF,UKF,PF,EDH,LEDH,KPF,SPF,DPF,HMC,PMMH)
 /simulator/              # Synthetic data generators for SSMs and experiment data
 /notebooks/              # Reproducible experiments, comparisons, and figure generation
 /tests/                  # Unit + integration tests
@@ -41,6 +41,7 @@ README.md                # Project overview (this file)
 | EKF vs UKF vs PF (core comparison) | `notebooks/EKF_UKF_PF_comparison.ipynb` |
 | EDH/LEDH/KPF on nonlinear SSMs | `notebooks/EDH_LEDH_KPF_NLNGSSM.ipynb` |
 | Differentiable PF (DPF) resampling comparisons | `notebooks/DPF_resampling_comparison_nonlinear.ipynb` |
+| HMC+DPF-OT vs PMMH parameter inference | `notebooks/DPF_HMC_PMMH.ipynb` |
 
 ## Common issues
 
@@ -104,9 +105,9 @@ where:
 **Parameters for synthetic data generation:**
 - State dimension: 2
 - Observation dimension: 2
-- A = $`\begin{bmatrix} 0.9 & 0.5 \\ 0.0 & 0.7 \end{bmatrix}`$
+- $A = \left[\begin{matrix} 0.9 & 0.5 \\ 0.0 & 0.7 \end{matrix}\right]$
 - $B = \mathrm{diag}(\sqrt{0.05}, \sqrt{0.02})$
-- C = $`\begin{bmatrix} 1.0 & 0.0 \\ 0.0 & 1.0 \end{bmatrix}`$
+- $C = \left[\begin{matrix} 1.0 & 0.0 \\ 0.0 & 1.0 \end{matrix}\right]$
 - $D = \mathrm{diag}(\sqrt{0.10}, \sqrt{0.10})$
 - Initial state covariance: $\Sigma = I$
 - Time steps: 1000
@@ -182,7 +183,9 @@ This model is nonlinear and non-Gaussian in the observation equation, making it 
 ### 6.1 EDH Flow
 - The Exact Daum-Huang (EDH) flow implements a deterministic continuous-time Bayes update for particles.
 - The flow is defined by an ODE:
-  $\frac{dx}{d\lambda} = K(x, \lambda) \nabla_x \log p(y|x)$
+  $$
+  \frac{dx}{d\lambda} = K(x, \lambda) \nabla_x \log p(y|x)
+  $$
   where $K(x, \lambda)$ is a gain matrix, typically from linearization.
 - In EDH, the gain is computed globally from the linearized model at the ensemble mean.
 - Jacobian determinant and condition number are monitored for stability.
@@ -236,18 +239,24 @@ This model is nonlinear and non-Gaussian in the observation equation, making it 
 
 ## 8. Stochastic Particle Flow (SPF)
 
-### 8.1 Motivation
+## 8.1 Motivation
 SPF performs the measurement update by tempering the likelihood over pseudo-time $\lambda\in[0,1]$, and adds diffusion to reduce particle collapse.
 
 Tempered posterior:
-$\pi_{\lambda}(x) \propto p(y\mid x)^{\beta(\lambda)}p(x),\quad \beta(0)=0,\quad \beta(1)=1.$
+$$
+\pi_{\lambda}(x) \propto p(y\mid x)^{\beta(\lambda)}\,p(x),\qquad \beta(0)=0,\;\beta(1)=1.
+$$
 Schedules used in the repo: linear $\beta(\lambda)=\lambda$ and a numerically-solved “optimal” $\beta^*(\lambda)$ (bisection/shooting).
 
 Local linear–Gaussian model used in the SPF:
-$y = Hx + v,\quad v\sim\mathcal{N}(0, R),\quad x\sim\mathcal{N}(m_0, P_0).$
+$$
+y = Hx + v,\qquad v\sim\mathcal{N}(0, R),\qquad x\sim\mathcal{N}(m_0, P_0).
+$$
 
 Stochastic flow (integrated by Euler–Maruyama):
-$dX_{\lambda} = a(X_{\lambda},\lambda)d\lambda + B(X_{\lambda},\lambda)dW_{\lambda}.$
+$$
+dX_{\lambda} = a(X_{\lambda},\lambda)\,d\lambda + B(X_{\lambda},\lambda)\,dW_{\lambda}.
+$$
 
 ### 8.2 Experiments and outputs
 Reproductions compare SPF (optimal $\beta^*$) vs SPF (linear $\beta$) vs SIR PF.
@@ -256,20 +265,26 @@ Reproductions compare SPF (optimal $\beta^*$) vs SPF (linear $\beta$) vs SIR PF.
 
 ## 9. Differentiable Particle Filters (DPF) and Resampling Variants
 
-The common goal is to map a weighted particle set $`\{(x^{(i)}, w^{(i)})\}_{i=1}^{N}`$ to an approximately unweighted set $`\{\tilde{x}^{(j)}\}_{j=1}^{N}`$ smoothly (and in some cases differentiably), improving stability in nonlinear/non-Gaussian settings.
+The common goal is to map a weighted particle set $\left\{\left(x^{(i)}, w^{(i)}\right)\right\}_{i=1}^{N}$ to an approximately unweighted set $\left\{\tilde{x}^{(j)}\right\}_{j=1}^{N}$ smoothly (and in some cases differentiably), improving stability in nonlinear/non-Gaussian settings.
 
 ### 9.1 Soft resampling (Gumbel–Softmax mixture)
 
 Soft resampling uses a mixture distribution
-$q_i = (1-\alpha) w_i + \alpha\,\frac{1}{N},\quad \alpha\in[0,1],$
+$$
+q_i = (1-\alpha) w_i + \alpha\,\frac{1}{N},\qquad \alpha\in[0,1],
+$$
 and draws (soft) ancestor assignments using a Gumbel–Softmax reparameterization. This yields a differentiable approximation to categorical resampling and helps avoid hard particle impoverishment.
 
 ### 9.2 Optimal-transport (OT) resampling (Sinkhorn + barycentric projection)
 
 OT resampling computes an entropic-regularized transport plan $P\in\mathbb{R}^{N\times N}$ between the weighted empirical measure and a uniform target:
-$a=w,\quad b=\tfrac{1}{N}\mathbf{1},\quad C_{ij}=\|x^{(i)}-x^{(j)}\|^2.$
-Using Sinkhorn iterations, it forms $P$ (approximately satisfying $P\mathbf{1}=a$ and $P^T\mathbf{1}=b$), then applies the barycentric projection:
-$\tilde{x}^{(j)} = \frac{1}{b_j}\sum_i P_{ij} x^{(i)}\text{(so for }b_j=1/N, \tilde{x}^{(j)}=N\sum_i P_{ij}x^{(i)}\text{)}.$
+$$
+a=w,\qquad b=\tfrac{1}{N}\mathbf{1},\qquad C_{ij}=\|x^{(i)}-x^{(j)}\|^2.
+$$
+Using Sinkhorn iterations, it forms $P$ (approximately satisfying $P\mathbf{1}=a$ and $P^T\mathbf{1}=b$), then applies the **barycentric projection**:
+$$
+        	ilde{x}^{(j)} = \frac{1}{b_j}\sum_i P_{ij} x^{(i)}\;\;\;\text{(so for }b_j=1/N:\; \tilde{x}^{(j)}=N\sum_i P_{ij}x^{(i)}\text{)}.
+$$
 This produces smoothly moved particles with uniform weights and typically reduces Monte Carlo noise relative to discrete resampling.
 
 ### 9.3 Learned / RNN-based resampling
@@ -277,7 +292,49 @@ This produces smoothly moved particles with uniform weights and typically reduce
 An RNN (LSTM/GRU) can be used to output assignment probabilities over old particles given particle states and weights, enabling data-driven resampling policies. The implementation supports a baseline mode (no training) and a learned mode.
 
 
-## 10. References
+## 10. HMC with DPF-OT Likelihood (Gradient-Based Parameter Inference)
+
+### 10.1 Motivation
+
+Standard particle filters are non-differentiable at the resampling step, so gradient-based samplers like HMC cannot be applied directly to particle filter likelihoods. OT resampling (§9.2) restores the gradient path, enabling pseudo-marginal HMC to perform parameter inference with the DPF-OT as the likelihood estimator.
+
+### 10.2 Method
+
+**Pseudo-marginal HMC with Common Random Numbers (CRN).** The DPF-OT log-likelihood is stochastic (different particle noise → different value). Two design choices make this compatible with HMC:
+
+1. **`stop_gradient` after each OT step.** Backpropagating through all Sinkhorn iterations produces exploding Jacobians. Stopping the gradient after each resampling step treats resampled particles as fixed data for the next time step, keeping gradients bounded.
+
+2. **CRN noise.** The same particle noise $(\varepsilon_\text{init}, \varepsilon_\text{trans})$ is drawn once per leapfrog trajectory and reused at both the current and proposed parameter values in the Metropolis–Hastings step. This makes the noise cancel in the acceptance ratio, preserving detailed balance and greatly reducing MC variance.
+
+**Reparameterised transitions.** The state transition is written as $X_{t+1} = f(X_t) + \sigma_v \cdot \varepsilon_t$ with $\varepsilon_t \sim \mathcal{N}(0, I)$ held fixed, keeping $\sigma_v$ as a multiplicative factor in the computation graph.
+
+**Two-phase warm-up:**
+- *Phase 1 — MAP via Adam:* gradient ascent (averaged over multiple noise samples per step) locates the posterior mode, avoiding cold-start degeneracy.
+- *Phase 2 — Fixed-step PM-HMC:* leapfrog integration from the MAP with a diagonal mass matrix estimated from the gradient magnitude at MAP.
+
+
+## 11. PMMH — Particle Marginal Metropolis–Hastings (Gradient-Free Baseline)
+
+### 11.1 Motivation
+
+PMMH is the standard gradient-free method for particle filter-based parameter inference. It uses the bootstrap PF marginal likelihood estimator inside a random-walk Metropolis–Hastings kernel, requires no differentiability, and satisfies exact detailed balance.
+
+### 11.2 Method
+
+**Bootstrap PF log-likelihood.** At each PMMH step, a standard particle filter (sequential importance resampling with multinomial resampling) is run to compute an unbiased estimate $\hat{\ell}(\theta) = \sum_{t=1}^T \log \hat{Z}_t$ of the marginal log-likelihood.
+
+**Random-walk proposals** on the log-scale:
+
+$$\theta' = \theta + \delta, \quad \delta \sim \mathcal{N}(0,\, \sigma_\text{prop}^2 I)$$
+
+**Acceptance ratio:**
+
+$$\alpha = \min\!\left(1,\; \frac{\hat{p}(y \mid \theta')\,p(\theta')}{\hat{p}(y \mid \theta)\,p(\theta)}\right)$$
+
+Because $\hat{p}(y \mid \theta)$ is an unbiased estimator of the true marginal likelihood, this satisfies detailed balance for the exact posterior $p(\theta \mid y)$.
+
+
+## 12. References
 
 - Doucet, A., & Johansen, A. (2009). A Tutorial on Particle Filtering and Smoothing: Fifteen Years Later. *Handbook of Nonlinear Filtering*, 12.
 - Li, Q., Li, R., Ji, K., & Dai, W. (2015). Kalman Filter and Its Application. *2015 8th International Conference on Intelligent Networks and Intelligent Systems (ICINIS)*, 74-77. https://doi.org/10.1109/ICINIS.2015.35
@@ -292,11 +349,10 @@ An RNN (LSTM/GRU) can be used to output assignment probabilities over old partic
 - Dai, L., & Daum, F. (2021). A New Parameterized Family of Stochastic Particle Flow Filters. arXiv:2103.09676. https://arxiv.org/abs/2103.09676
 - Dai, L., & Daum, F. E. (2021). Stiffness Mitigation in Stochastic Particle Flow Filters. arXiv:2107.04672. https://arxiv.org/abs/2107.04672
 - Corenflos, A., Thornton, J., Deligiannidis, G., & Doucet, A. (2021). Differentiable Particle Filtering via Entropy-Regularized Optimal Transport. *Proceedings of the 38th International Conference on Machine Learning (ICML)*, PMLR 139, 2100–2111. https://proceedings.mlr.press/v139/corenflos21a.html
+- Andrieu, C., Doucet, A., & Holenstein, R. (2010). Particle Markov chain Monte Carlo methods. *Journal of the Royal Statistical Society: Series B (Statistical Methodology)*, 72(3), 269–342. https://doi.org/10.1111/j.1467-9868.2009.00736.x
+- Brooks, S., Gelman, A., Jones, G. L., & Meng, X.-L. (Eds.). (2011). *Handbook of Markov Chain Monte Carlo*. Chapman and Hall/CRC. https://doi.org/10.1201/b10905
 - Chen, X., & Li, Y. (2025). An overview of differentiable particle filters for data-adaptive sequential Bayesian inference. *Foundations of Data Science*, 7(4), 915–943. https://doi.org/10.3934/fods.2023014
 - Jonschkowski, R., Rastogi, D., & Brock, O. (2018). Differentiable Particle Filters: End-to-End Learning with Algorithmic Priors. arXiv:1805.11122. https://arxiv.org/abs/1805.11122
 - Ma, X., Karkus, P., & Hsu, D. (2020). Particle Filter Recurrent Neural Networks. *AAAI Conference on Artificial Intelligence*, 34(04), 5101–5108. https://doi.org/10.1609/aaai.v34i04.5952
-
-
-
 
 

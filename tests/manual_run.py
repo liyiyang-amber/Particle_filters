@@ -33,7 +33,15 @@ Usage:
     python tests/manual_run.py --phase mat-filters # Run MAT filter integration tests
     python tests/manual_run.py --phase snlg-filters # Run SNLG filter integration tests
     python tests/manual_run.py --phase snlg-skewt-filters # Run SNLG Skew-t filter integration tests
+    python tests/manual_run.py --phase nonlin-ssm         # Run NonlinearSSM simulator unit tests
+    python tests/manual_run.py --phase nonlin-ssm-filters # Run NonlinearSSM filter integration tests (Bootstrap PF + EDH + LEDH)
     python tests/manual_run.py --phase spf-integration # Run SPF integration tests
+    python tests/manual_run.py --phase hmc               # Run HMC inference unit tests
+    python tests/manual_run.py --phase pmmh              # Run PMMH inference unit tests
+    python tests/manual_run.py --phase inference         # Run all HMC + PMMH tests (unit + integration)
+    python tests/manual_run.py --phase hmc-integration   # Run HMC vs NonlinearSSM integration tests
+    python tests/manual_run.py --phase pmmh-integration  # Run PMMH vs NonlinearSSM integration tests
+    python tests/manual_run.py --phase inference-integration # Run HMC & PMMH integration tests only
     python tests/manual_run.py --verbose          # Show verbose output
     python tests/manual_run.py --summary          # Show test statistics summary
 
@@ -232,10 +240,19 @@ def run_lorenz96_simulator_tests(verbose: bool = False) -> Tuple[bool, int, int]
     return run_pytest(test_paths, "Lorenz 96 Simulator Unit Tests", verbose)
 
 
+def run_nonlin_ssm_simulator_tests(verbose: bool = False) -> Tuple[bool, int, int]:
+    """Run NonlinearSSM (benchmark nonlinear SSM) simulator unit tests"""
+    test_paths = [
+        "tests/unit_tests/simulator/test_nonlin_ssm_shapes_and_seed.py",
+        "tests/unit_tests/simulator/test_nonlin_ssm_statistics.py"
+    ]
+    return run_pytest(test_paths, "NonlinearSSM Simulator Unit Tests (shapes, seed, statistics)", verbose)
+
+
 def run_simulator_tests(verbose: bool = False) -> Tuple[bool, int, int]:
-    """Run all simulator tests (LGSSM + SV + MAT + SNLG + SNLG Skew-t + Lorenz96)"""
+    """Run all simulator tests (LGSSM + SV + MAT + SNLG + SNLG Skew-t + Lorenz96 + NonlinSSM)"""
     test_paths = ["tests/unit_tests/simulator/"]
-    return run_pytest(test_paths, "All Simulator Unit Tests (LGSSM + SV + MAT + SNLG + SNLG Skew-t + Lorenz96)", verbose)
+    return run_pytest(test_paths, "All Simulator Unit Tests (LGSSM + SV + MAT + SNLG + SNLG Skew-t + Lorenz96 + NonlinSSM)", verbose)
 
 
 def run_kf_tests(verbose: bool = False) -> Tuple[bool, int, int]:
@@ -366,6 +383,14 @@ def run_spf_integration_tests(verbose: bool = False) -> Tuple[bool, int, int]:
     return run_pytest(test_paths, "Stochastic Particle Filter (SPF) Integration Tests", verbose)
 
 
+def run_nonlin_ssm_filter_integration_tests(verbose: bool = False) -> Tuple[bool, int, int]:
+    """Run NonlinearSSM filter integration tests (Bootstrap PF, EDH-PF, LEDH-PF)"""
+    test_paths = [
+        "tests/integration_tests/test_filters_nonlin_ssm.py"
+    ]
+    return run_pytest(test_paths, "NonlinearSSM Filter Integration Tests (Bootstrap PF + EDH-PF + LEDH-PF)", verbose)
+
+
 def run_dpf_soft_tests(verbose: bool = False) -> Tuple[bool, int, int]:
     """Run Differentiable Particle Filter with Soft Resampling unit tests"""
     test_paths = [
@@ -406,6 +431,49 @@ def run_dpf_sv_integration_tests(verbose: bool = False) -> Tuple[bool, int, int]
         "tests/integration_tests/test_dpf_vs_sv_simulator.py"
     ]
     return run_pytest(test_paths, "DPF Integration Tests with Stochastic Volatility (Soft + RNN + OT)", verbose)
+
+
+def run_hmc_inference_tests(verbose: bool = False) -> Tuple[bool, int, int]:
+    """Run HMC inference unit tests"""
+    test_paths = [
+        "tests/unit_tests/models/test_hmc_inference.py"
+    ]
+    return run_pytest(test_paths, "HMC Inference Unit Tests (config, sampler, ESS)", verbose)
+
+
+def run_pmmh_inference_tests(verbose: bool = False) -> Tuple[bool, int, int]:
+    """Run PMMH inference unit tests"""
+    test_paths = [
+        "tests/unit_tests/models/test_pmmh_inference.py"
+    ]
+    return run_pytest(test_paths, "PMMH Inference Unit Tests (config, sampler, adaptation, ESS)", verbose)
+
+
+def run_hmc_nonlin_ssm_integration_tests(verbose: bool = False) -> Tuple[bool, int, int]:
+    """Run HMC vs NonlinearSSM integration tests"""
+    test_paths = [
+        "tests/integration_tests/test_hmc_vs_nonlin_ssm.py"
+    ]
+    return run_pytest(test_paths, "HMC vs NonlinearSSM Integration Tests (pseudo-marginal BPF)", verbose)
+
+
+def run_pmmh_nonlin_ssm_integration_tests(verbose: bool = False) -> Tuple[bool, int, int]:
+    """Run PMMH vs NonlinearSSM integration tests"""
+    test_paths = [
+        "tests/integration_tests/test_pmmh_vs_nonlin_ssm.py"
+    ]
+    return run_pytest(test_paths, "PMMH vs NonlinearSSM Integration Tests (pseudo-marginal BPF)", verbose)
+
+
+def run_all_inference_tests(verbose: bool = False) -> Tuple[bool, int, int]:
+    """Run all HMC and PMMH tests (unit + integration)"""
+    test_paths = [
+        "tests/unit_tests/models/test_hmc_inference.py",
+        "tests/unit_tests/models/test_pmmh_inference.py",
+        "tests/integration_tests/test_hmc_vs_nonlin_ssm.py",
+        "tests/integration_tests/test_pmmh_vs_nonlin_ssm.py",
+    ]
+    return run_pytest(test_paths, "All Inference Tests (HMC + PMMH: Unit + Integration)", verbose)
 
 
 def run_all_dpf_tests(verbose: bool = False) -> Tuple[bool, int, int]:
@@ -510,7 +578,31 @@ def run_all_tests(verbose: bool = False) -> Tuple[bool, int, int]:
     success, passed, failed = run_sn_skewt_filter_integration_tests(verbose)
     all_passed.append(passed)
     all_failed.append(failed)
-    
+
+    # Phase 15: NonlinearSSM Filter Integration (Bootstrap PF, EDH-PF, LEDH-PF)
+    print_section("PHASE 15: NonlinearSSM Filter Integration (Bootstrap PF + EDH-PF + LEDH-PF)")
+    success, passed, failed = run_nonlin_ssm_filter_integration_tests(verbose)
+    all_passed.append(passed)
+    all_failed.append(failed)
+
+    # Phase 16: HMC & PMMH Inference Unit Tests
+    print_section("PHASE 16: HMC & PMMH Inference Unit Tests")
+    success, passed, failed = run_hmc_inference_tests(verbose)
+    all_passed.append(passed)
+    all_failed.append(failed)
+    success, passed, failed = run_pmmh_inference_tests(verbose)
+    all_passed.append(passed)
+    all_failed.append(failed)
+
+    # Phase 17: HMC & PMMH vs NonlinearSSM Integration Tests
+    print_section("PHASE 17: HMC & PMMH vs NonlinearSSM Integration Tests")
+    success, passed, failed = run_hmc_nonlin_ssm_integration_tests(verbose)
+    all_passed.append(passed)
+    all_failed.append(failed)
+    success, passed, failed = run_pmmh_nonlin_ssm_integration_tests(verbose)
+    all_passed.append(passed)
+    all_failed.append(failed)
+
     total_passed = sum(all_passed)
     total_failed = sum(all_failed)
     total_success = total_failed == 0
@@ -555,7 +647,8 @@ def print_test_statistics():
             "Sensor Network Linear Gaussian (SNLG)": 90,
             "Sensor Network GH Skew-t (SNLG Skew-t)": 97,
             "Lorenz 96 (Chaotic System)": 38,
-            "Subtotal": 271
+            "NonlinearSSM (Benchmark Nonlinear SSM)": 35,
+            "Subtotal": 306
         },
         "Filters": {
             "Kalman Filter (KF)": 6,
@@ -573,7 +666,9 @@ def print_test_statistics():
             "DPF with Soft Resampling - Unit Tests": 15,
             "DPF with RNN Resampling - Unit Tests": 20,
             "DPF with Optimal Transport - Unit Tests": 24,
-            "Subtotal": 405
+            "HMC Inference - Unit Tests": 36,
+            "PMMH Inference - Unit Tests": 38,
+            "Subtotal": 479
         },
         "Integration Tests": {
             "KF Integration": 2,
@@ -606,7 +701,13 @@ def print_test_statistics():
             "DPF-RNN SV Integration": 3,
             "DPF-OT SV Integration": 4,
             "DPF Comparative Tests (SV)": 2,
-            "Subtotal": 168
+            "NonlinearSSM - Bootstrap PF Integration": 6,
+            "NonlinearSSM - EDH-PF Integration": 6,
+            "NonlinearSSM - LEDH-PF Integration": 6,
+            "NonlinearSSM - Cross-filter Tests": 4,
+            "HMC vs NonlinearSSM Integration": 22,
+            "PMMH vs NonlinearSSM Integration": 33,
+            "Subtotal": 239
         }
     }
     
@@ -630,8 +731,8 @@ def print_test_statistics():
     print(f"{Colors.BOLD}{Colors.MAGENTA}{'─' * 80}{Colors.END}\n")
     
     print(f"{Colors.BOLD}Test Coverage:{Colors.END}")
-    print(f"  • Unit Tests: {Colors.GREEN}676{Colors.END} tests (80%)")
-    print(f"  • Integration Tests: {Colors.GREEN}168{Colors.END} tests (20%)")
+    print(f"  • Unit Tests: {Colors.GREEN}784{Colors.END} tests (77%)")
+    print(f"  • Integration Tests: {Colors.GREEN}239{Colors.END} tests (23%)")
     print()
     
     print(f"{Colors.BOLD}Features Tested:{Colors.END}")
@@ -684,6 +785,18 @@ def print_test_statistics():
     print(f"  ✓ DPF integration with LGSSM (linear Gaussian systems)")
     print(f"  ✓ DPF integration with Stochastic Volatility (nonlinear model)")
     print(f"  ✓ Comparative analysis of DPF variants (Soft vs RNN vs OT)")
+    print(f"  ✓ NonlinearSSM benchmark (bimodal posterior, high process noise)")
+    print(f"  ✓ Simulator validation: shapes, dtypes, seed reproducibility, I/O")
+    print(f"  ✓ Statistical tests: initial state N(0,5), process/measurement noise")
+    print(f"  ✓ Bootstrap PF on nonlinear benchmark (SIR, systematic resampling)")
+    print(f"  ✓ EDH-PF on nonlinear benchmark (particle flow, global linearization)")
+    print(f"  ✓ LEDH-PF on nonlinear benchmark (per-particle linearization)")
+    print(f"  ✓ HMC parameter inference (TFP-based, pseudo-marginal with BPF)")
+    print(f"  ✓ PMMH parameter inference (random-walk MH, gradient-free)")
+    print(f"  ✓ HMC config, step-size adaptation, leapfrog variants, ESS")
+    print(f"  ✓ PMMH config, proposal adaptation, acceptance diagnostics, ESS")
+    print(f"  ✓ HMC vs NonlinearSSM: log-posterior, output contract, sampling quality")
+    print(f"  ✓ PMMH vs NonlinearSSM: log-posterior, output contract, sampling quality")
     print()
 
 
@@ -696,7 +809,7 @@ def main():
     )
     parser.add_argument(
         "--phase",
-        choices=["simulator", "lgssm", "sv", "mat", "snlg", "snlg-skewt", "lorenz96", "kf", "kalman", "ekf", "ukf", "pf", "particle", "edh", "ledh", "kpf", "kernel-pf", "spf", "stochastic-pf", "dpf-soft", "dpf-rnn", "dpf-ot", "dpf", "dpf-lgssm", "dpf-sv", "filters", "integration", "mat-filters", "snlg-filters", "snlg-skewt-filters", "kpf-integration", "spf-integration", "all"],
+        choices=["simulator", "lgssm", "sv", "mat", "snlg", "snlg-skewt", "lorenz96", "nonlin-ssm", "kf", "kalman", "ekf", "ukf", "pf", "particle", "edh", "ledh", "kpf", "kernel-pf", "spf", "stochastic-pf", "dpf-soft", "dpf-rnn", "dpf-ot", "dpf", "dpf-lgssm", "dpf-sv", "filters", "integration", "mat-filters", "snlg-filters", "snlg-skewt-filters", "kpf-integration", "spf-integration", "nonlin-ssm-filters", "hmc", "pmmh", "inference", "hmc-integration", "pmmh-integration", "inference-integration", "all"],
         default="all",
         help="Which test phase to run (default: all)"
     )
@@ -739,6 +852,8 @@ def main():
         success, passed, failed = run_sn_skewt_simulator_tests(args.verbose)
     elif args.phase == "lorenz96":
         success, passed, failed = run_lorenz96_simulator_tests(args.verbose)
+    elif args.phase == "nonlin-ssm":
+        success, passed, failed = run_nonlin_ssm_simulator_tests(args.verbose)
     elif args.phase in ["kf", "kalman"]:
         success, passed, failed = run_kf_tests(args.verbose)
     elif args.phase == "ekf":
@@ -781,6 +896,25 @@ def main():
         success, passed, failed = run_kernel_pf_integration_tests(args.verbose)
     elif args.phase == "spf-integration":
         success, passed, failed = run_spf_integration_tests(args.verbose)
+    elif args.phase == "nonlin-ssm-filters":
+        success, passed, failed = run_nonlin_ssm_filter_integration_tests(args.verbose)
+    elif args.phase == "hmc":
+        success, passed, failed = run_hmc_inference_tests(args.verbose)
+    elif args.phase == "pmmh":
+        success, passed, failed = run_pmmh_inference_tests(args.verbose)
+    elif args.phase == "inference":
+        success, passed, failed = run_all_inference_tests(args.verbose)
+    elif args.phase == "hmc-integration":
+        success, passed, failed = run_hmc_nonlin_ssm_integration_tests(args.verbose)
+    elif args.phase == "pmmh-integration":
+        success, passed, failed = run_pmmh_nonlin_ssm_integration_tests(args.verbose)
+    elif args.phase == "inference-integration":
+        success, passed, failed = run_pytest(
+            ["tests/integration_tests/test_hmc_vs_nonlin_ssm.py",
+             "tests/integration_tests/test_pmmh_vs_nonlin_ssm.py"],
+            "HMC & PMMH Integration Tests (NonlinearSSM)",
+            args.verbose,
+        )
     else:  # all
         success, passed, failed = run_all_tests(args.verbose)
     
