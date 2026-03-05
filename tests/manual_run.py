@@ -42,6 +42,12 @@ Usage:
     python tests/manual_run.py --phase hmc-integration   # Run HMC vs NonlinearSSM integration tests
     python tests/manual_run.py --phase pmmh-integration  # Run PMMH vs NonlinearSSM integration tests
     python tests/manual_run.py --phase inference-integration # Run HMC & PMMH integration tests only
+    python tests/manual_run.py --phase tf-core       # Run TF unit tests: lgssm_log_likelihood, kalman_filter_tf, EKF/UKF trackers
+    python tests/manual_run.py --phase tf-pf         # Run TF unit tests: systematic_resample_tf, ParticleFilterTF
+    python tests/manual_run.py --phase tf-ssm        # Run TF unit tests: LGSSM_TFP, NonlinSSM_TFP, run_hmc
+    python tests/manual_run.py --phase tf-unit       # Run all TF unit tests (tf_core + tf_particle_filter + tf_ssm_models)
+    python tests/manual_run.py --phase tf-integration # Run TF integration tests (NumPy vs TF KF, XLA, gradients, PF, HMC)
+    python tests/manual_run.py --phase tf            # Run all TF/TFP tests (unit + integration, 107 tests)
     python tests/manual_run.py --verbose          # Show verbose output
     python tests/manual_run.py --summary          # Show test statistics summary
 
@@ -476,6 +482,63 @@ def run_all_inference_tests(verbose: bool = False) -> Tuple[bool, int, int]:
     return run_pytest(test_paths, "All Inference Tests (HMC + PMMH: Unit + Integration)", verbose)
 
 
+# ---------------------------------------------------------------------------
+# TensorFlow / TFP test runners
+# ---------------------------------------------------------------------------
+
+def run_tf_core_tests(verbose: bool = False) -> Tuple[bool, int, int]:
+    """Run unit tests for tf_core.py (lgssm_log_likelihood, kalman_filter_tf, EKF/UKF trackers)"""
+    test_paths = [
+        "tests/unit_tests/models/test_tf_core.py",
+    ]
+    return run_pytest(test_paths, "TF Core Unit Tests (lgssm_log_likelihood, kalman_filter_tf, EKF/UKF)", verbose)
+
+
+def run_tf_particle_filter_tests(verbose: bool = False) -> Tuple[bool, int, int]:
+    """Run unit tests for tf_particle_filter.py (systematic resample, ParticleFilterTF)"""
+    test_paths = [
+        "tests/unit_tests/models/test_tf_particle_filter.py",
+    ]
+    return run_pytest(test_paths, "TF Particle Filter Unit Tests (systematic_resample_tf, ParticleFilterTF)", verbose)
+
+
+def run_tf_ssm_models_tests(verbose: bool = False) -> Tuple[bool, int, int]:
+    """Run unit tests for tf_ssm_models.py (LGSSM_TFP, NonlinSSM_TFP, HMC targets)"""
+    test_paths = [
+        "tests/unit_tests/models/test_tf_ssm_models.py",
+    ]
+    return run_pytest(test_paths, "TF SSM Models Unit Tests (LGSSM_TFP, NonlinSSM_TFP, run_hmc)", verbose)
+
+
+def run_tf_unit_tests(verbose: bool = False) -> Tuple[bool, int, int]:
+    """Run all TF unit tests (tf_core + tf_particle_filter + tf_ssm_models)"""
+    test_paths = [
+        "tests/unit_tests/models/test_tf_core.py",
+        "tests/unit_tests/models/test_tf_particle_filter.py",
+        "tests/unit_tests/models/test_tf_ssm_models.py",
+    ]
+    return run_pytest(test_paths, "All TF Unit Tests (tf_core + tf_particle_filter + tf_ssm_models)", verbose)
+
+
+def run_tf_integration_tests(verbose: bool = False) -> Tuple[bool, int, int]:
+    """Run TF integration tests (NumPy vs TF KF, XLA, gradients, PF tracking, HMC)"""
+    test_paths = [
+        "tests/integration_tests/test_tf_vs_numpy_lgssm.py",
+    ]
+    return run_pytest(test_paths, "TF Integration Tests (NumPy vs TF KF, XLA, gradients, PF, HMC)", verbose)
+
+
+def run_all_tf_tests(verbose: bool = False) -> Tuple[bool, int, int]:
+    """Run all TF/TFP tests (unit + integration)"""
+    test_paths = [
+        "tests/unit_tests/models/test_tf_core.py",
+        "tests/unit_tests/models/test_tf_particle_filter.py",
+        "tests/unit_tests/models/test_tf_ssm_models.py",
+        "tests/integration_tests/test_tf_vs_numpy_lgssm.py",
+    ]
+    return run_pytest(test_paths, "All TF/TFP Tests (unit + integration, 107 tests)", verbose)
+
+
 def run_all_dpf_tests(verbose: bool = False) -> Tuple[bool, int, int]:
     """Run all DPF tests (unit + integration)"""
     test_paths = [
@@ -603,6 +666,12 @@ def run_all_tests(verbose: bool = False) -> Tuple[bool, int, int]:
     all_passed.append(passed)
     all_failed.append(failed)
 
+    # Phase 18: TensorFlow / TFP Tests (unit + integration)
+    print_section("PHASE 18: TensorFlow / TFP Tests (tf_core, tf_particle_filter, tf_ssm_models)")
+    success, passed, failed = run_all_tf_tests(verbose)
+    all_passed.append(passed)
+    all_failed.append(failed)
+
     total_passed = sum(all_passed)
     total_failed = sum(all_failed)
     total_success = total_failed == 0
@@ -707,7 +776,22 @@ def print_test_statistics():
             "NonlinearSSM - Cross-filter Tests": 4,
             "HMC vs NonlinearSSM Integration": 22,
             "PMMH vs NonlinearSSM Integration": 33,
-            "Subtotal": 239
+            "TF/TFP Integration (NumPy vs TF KF, XLA, gradients, PF, HMC)": 19,
+            "Subtotal": 258
+        },
+        "TF/TFP Unit Tests": {
+            "TF Core (lgssm_log_likelihood, kalman_filter_tf)": 21,
+            "TF EKF Tracker": 8,
+            "TF UKF Tracker": 7,
+            "TF Particle Filter (systematic_resample_tf)": 5,
+            "TF Particle Filter (ParticleFilterTF init + step)": 16,
+            "TF run_particle_filter_tf": 9,
+            "LGSSM_TFP": 8,
+            "NonlinSSM_TFP": 5,
+            "make_lgssm_hmc_target": 4,
+            "make_nonlinssm_hmc_target": 4,
+            "run_hmc": 6,
+            "Subtotal": 93
         }
     }
     
@@ -731,8 +815,8 @@ def print_test_statistics():
     print(f"{Colors.BOLD}{Colors.MAGENTA}{'─' * 80}{Colors.END}\n")
     
     print(f"{Colors.BOLD}Test Coverage:{Colors.END}")
-    print(f"  • Unit Tests: {Colors.GREEN}784{Colors.END} tests (77%)")
-    print(f"  • Integration Tests: {Colors.GREEN}239{Colors.END} tests (23%)")
+    print(f"  • Unit Tests: {Colors.GREEN}877{Colors.END} tests (77%)")
+    print(f"  • Integration Tests: {Colors.GREEN}258{Colors.END} tests (23%)")
     print()
     
     print(f"{Colors.BOLD}Features Tested:{Colors.END}")
@@ -797,6 +881,20 @@ def print_test_statistics():
     print(f"  ✓ PMMH config, proposal adaptation, acceptance diagnostics, ESS")
     print(f"  ✓ HMC vs NonlinearSSM: log-posterior, output contract, sampling quality")
     print(f"  ✓ PMMH vs NonlinearSSM: log-posterior, output contract, sampling quality")
+    print(f"  ✓ TF/TFP lgssm_log_likelihood: value, finitude, NumPy match, gradient, XLA")
+    print(f"  ✓ TF kalman_filter_tf: shapes, PD covariances, filtered mean vs NumPy KF")
+    print(f"  ✓ TF EKFTrackerTF / UKFTrackerTF: step shapes, types, linear recovery")
+    print(f"  ✓ TF systematic_resample_tf: shape, index bounds, uniform / peaked weights")
+    print(f"  ✓ TF ParticleFilterTF: init, step, weight normalisation, ESS, no-resample mode")
+    print(f"  ✓ TF run_particle_filter_tf: full-sequence shapes, ESS bounds, finiteness")
+    print(f"  ✓ LGSSM_TFP: log_prob matches lgssm_log_likelihood, filter shapes, gradients")
+    print(f"  ✓ NonlinSSM_TFP: scalar output, finite, @tf.function callable, gradient flow")
+    print(f"  ✓ make_lgssm_hmc_target / make_nonlinssm_hmc_target: callable, finite, grad")
+    print(f"  ✓ run_hmc: sample shapes, bool acceptance dtype, finite samples, acceptance rate")
+    print(f"  ✓ XLA (jit_compile=True) vs standard @tf.function: numerical agreement <1e-3")
+    print(f"  ✓ Gradient of lgssm_log_likelihood w.r.t. Q and F: finite and non-zero")
+    print(f"  ✓ ParticleFilterTF tracking KF mean on simulated LGSSM: RMSE within 3× KF")
+    print(f"  ✓ HMC on standard Normal: posterior mean ≈ 0, std ≈ 1")
     print()
 
 
@@ -809,7 +907,7 @@ def main():
     )
     parser.add_argument(
         "--phase",
-        choices=["simulator", "lgssm", "sv", "mat", "snlg", "snlg-skewt", "lorenz96", "nonlin-ssm", "kf", "kalman", "ekf", "ukf", "pf", "particle", "edh", "ledh", "kpf", "kernel-pf", "spf", "stochastic-pf", "dpf-soft", "dpf-rnn", "dpf-ot", "dpf", "dpf-lgssm", "dpf-sv", "filters", "integration", "mat-filters", "snlg-filters", "snlg-skewt-filters", "kpf-integration", "spf-integration", "nonlin-ssm-filters", "hmc", "pmmh", "inference", "hmc-integration", "pmmh-integration", "inference-integration", "all"],
+        choices=["simulator", "lgssm", "sv", "mat", "snlg", "snlg-skewt", "lorenz96", "nonlin-ssm", "kf", "kalman", "ekf", "ukf", "pf", "particle", "edh", "ledh", "kpf", "kernel-pf", "spf", "stochastic-pf", "dpf-soft", "dpf-rnn", "dpf-ot", "dpf", "dpf-lgssm", "dpf-sv", "filters", "integration", "mat-filters", "snlg-filters", "snlg-skewt-filters", "kpf-integration", "spf-integration", "nonlin-ssm-filters", "hmc", "pmmh", "inference", "hmc-integration", "pmmh-integration", "inference-integration", "tf-core", "tf-pf", "tf-ssm", "tf-unit", "tf-integration", "tf", "all"],
         default="all",
         help="Which test phase to run (default: all)"
     )
@@ -915,6 +1013,18 @@ def main():
             "HMC & PMMH Integration Tests (NonlinearSSM)",
             args.verbose,
         )
+    elif args.phase == "tf-core":
+        success, passed, failed = run_tf_core_tests(args.verbose)
+    elif args.phase == "tf-pf":
+        success, passed, failed = run_tf_particle_filter_tests(args.verbose)
+    elif args.phase == "tf-ssm":
+        success, passed, failed = run_tf_ssm_models_tests(args.verbose)
+    elif args.phase == "tf-unit":
+        success, passed, failed = run_tf_unit_tests(args.verbose)
+    elif args.phase == "tf-integration":
+        success, passed, failed = run_tf_integration_tests(args.verbose)
+    elif args.phase == "tf":
+        success, passed, failed = run_all_tf_tests(args.verbose)
     else:  # all
         success, passed, failed = run_all_tests(args.verbose)
     

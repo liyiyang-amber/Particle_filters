@@ -1,7 +1,8 @@
 import numpy as np
 import pytest
 
-
+# import your simulator from your package/module
+# from yourpkg.simulator import simulate_lgssm, LGSSMSimulationResult
 from simulator.simulator_LGSSM import simulate_lgssm, LGSSMSimulationResult  
 
 @pytest.fixture(scope="session")
@@ -358,4 +359,35 @@ def skewt_heavy_tail_data(skewt_small_grid_config, skewt_heavy_tail_dyn_config,
         sim_cfg,
     )
     return data
+
+
+# ---------------------------------------------------------------------------
+# TensorFlow / TFP shared fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="session")
+def tf_lgssm_system(small_system):
+    """Convert the shared small_system dict to tf.float32 tensors.
+
+    Provides keys: F, H, Q, R, m0, P0 (all tf.Tensor float32).
+    """
+    import tensorflow as tf
+    p = small_system
+    return dict(
+        nx  = p["nx"],
+        ny  = p["ny"],
+        F   = tf.constant(p["Phi"],  dtype=tf.float32),
+        H   = tf.constant(p["H"],    dtype=tf.float32),
+        Q   = tf.constant(p["Q"],    dtype=tf.float32),
+        R   = tf.constant(p["R"],    dtype=tf.float32),
+        m0  = tf.constant(p["x0"],   dtype=tf.float32),
+        P0  = tf.constant(p["P0"],   dtype=tf.float32),
+    )
+
+
+@pytest.fixture(scope="session")
+def Y_tf(Y_synthetic):
+    """Y_synthetic cast to tf.float32 Tensor, shape (T, ny)."""
+    import tensorflow as tf
+    return tf.constant(Y_synthetic, dtype=tf.float32)
 
