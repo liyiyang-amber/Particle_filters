@@ -21,6 +21,12 @@ import numpy as np
 import pytest
 import tensorflow as tf
 
+tfp = pytest.importorskip(
+    "tensorflow_probability",
+    exc_type=ImportError,
+    reason="TensorFlow Probability is unavailable or incompatible with the installed TensorFlow version.",
+)
+
 pytestmark = [pytest.mark.integration, pytest.mark.tensorflow]
 
 from simulator.simulator_nonlinSSM import simulate_nonlinear_ssm

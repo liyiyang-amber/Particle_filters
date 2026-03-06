@@ -2,12 +2,25 @@
 Particle Filter (PF) for nonlinear state-space models.
 
 Implements a standard Sequential Importance Resampling (SIR) Particle Filter
-for additive-noise nonlinear systems, with optional systematic or multinomial
-resampling. 
+for additive-noise nonlinear systems with systematic or multinomial
+resampling, optional post-resample regularisation, and an optional
+particle-impoverishment jitter.
 
-Model:
-    x_k = g(x_{k-1}, u_{k-1}) + w_{k-1},   w ~ N(0, Q)
-    z_k = h(x_k) + v_k,                   v ~ N(0, R)
+The additive-noise SSM is::
+
+    x_k  = g(x_{k-1}, u_{k-1}) + w_{k-1},   w ~ N(0, Q)
+    z_k  = h(x_k) + v_k,                     v ~ N(0, R)
+
+Classes
+-------
+PFState        – Particle-filter posterior container.
+ParticleFilter – SIR PF implementing :class:`~base_ssm.BaseFilter`.
+
+Shared utilities from :mod:`base_ssm`
+--------------------------------------
+:func:`~base_ssm.systematic_resample`, :func:`~base_ssm.multinomial_resample`,
+:func:`~base_ssm.effective_sample_size`, and
+:func:`~base_ssm.weighted_mean_cov` are imported and reused directly.
 """
 
 from __future__ import annotations
@@ -17,63 +30,79 @@ from typing import Callable, Optional, Tuple
 
 import numpy as np
 
+try:
+    from models.base_ssm import (
+        BaseFilter,
+        BaseFilterState,
+        ParticleFilterState,
+        systematic_resample as _systematic_resample,
+        multinomial_resample as _multinomial_resample,
+        effective_sample_size as _ess,
+        weighted_mean_cov,
+    )
+except ModuleNotFoundError:
+    from base_ssm import (
+        BaseFilter,
+        BaseFilterState,
+        ParticleFilterState,
+        systematic_resample as _systematic_resample,
+        multinomial_resample as _multinomial_resample,
+        effective_sample_size as _ess,
+        weighted_mean_cov,
+    )
+
 Array = np.ndarray
 GFn = Callable[[Array, Optional[Array]], Array]
 HFn = Callable[[Array], Array]
 
 
 
-# State container
-@dataclass
-class PFState:
-    """Container for Particle Filter posterior state.
-
-    Parameters
-    ----------
-    particles : np.ndarray
-        Particle states (Np, nx).
-    weights : np.ndarray
-        Normalized weights (Np,).
-    mean : np.ndarray
-        Weighted posterior mean (nx,).
-    cov : np.ndarray
-        Weighted posterior covariance (nx, nx).
-    t : int
-        Discrete time index.
-    """
-
-    particles: Array
-    weights: Array
-    mean: Array
-    cov: Array
-    t: int
+# Keep PFState as an alias to ParticleFilterState for backward compatibility
+# with notebooks and tests that import it directly from this module.
+PFState = ParticleFilterState
 
 
 # Particle Filter implementation
-class ParticleFilter:
-    """SIR Particle Filter with resampling and regularization.
+class ParticleFilter(BaseFilter):
+    """SIR Particle Filter with resampling and optional regularisation.
+
+    Derives from :class:`~base_ssm.BaseFilter`, providing a consistent
+    ``initialize`` / ``predict`` / ``update`` / ``step`` / ``run`` interface.
+
+    The additive-noise SSM is::
+
+        x_k  = g(x_{k-1}, u_{k-1}) + w_{k-1},   w ~ N(0, Q)
+        z_k  = h(x_k) + v_k,                     v ~ N(0, R)
 
     Parameters
     ----------
     g : callable
-        State transition function g(x, u) → (nx,).
+        State transition function g(x, u) → (nx,), evaluated per particle.
     h : callable
-        Measurement function h(x) → (nz,).
-    Q : ndarray
-        Process noise covariance (nx, nx).
-    R : ndarray
-        Measurement noise covariance (nz, nz).
+        Measurement function h(x) → (nz,), evaluated per particle.
+    Q : ndarray, shape (nx, nx)
+        Process-noise covariance.
+    R : ndarray, shape (nz, nz)
+        Measurement-noise covariance.
     Np : int, optional
         Number of particles. Default is 1000.
     resample_thresh : float, optional
-        Fraction of Np triggering resample when Neff drops below. Default is 0.5.
+        Resample when ESS < resample_thresh * Np. Default is 0.5.
     resample_method : str, optional
-        Resampling method: 'systematic' or 'multinomial'. Default is 'systematic'.
+        Resampling method: ``'systematic'`` (default) or ``'multinomial'``.
     regularize_after_resample : bool, optional
-        If True, add small jitter after resampling to mitigate particle impoverishment.
-        Default is False.
+        If ``True``, add small Gaussian jitter (scaled by Q) after resampling
+        to mitigate particle impoverishment. Default is ``False``.
     rng : np.random.Generator, optional
-        Numpy random Generator. Default is None (uses default generator).
+        NumPy random generator for reproducibility. Default creates a new
+        default generator.
+
+    Notes
+    -----
+    Assumes ``g`` maps a single state (and optional control) to a state vector
+    of fixed dimension, and ``h`` maps a state vector to an observation vector
+    compatible with ``R``. The implementation uses Gaussian observation noise
+    and additive Gaussian process noise.
     """
 
     def __init__(
@@ -121,6 +150,11 @@ class ParticleFilter:
         -------
         PFState
             Filter posterior state with initialized particles.
+
+        Notes
+        -----
+        Assumes ``cov`` is positive semidefinite up to a small diagonal jitter
+        used for Cholesky factorisation.
         """
         mean = np.asarray(mean, float)
         cov = np.asarray(cov, float)
@@ -128,62 +162,64 @@ class ParticleFilter:
         particles = self.rng.standard_normal((self.Np, len(mean))) @ Lc.T + mean
         weights = np.ones(self.Np) / self.Np
         cov = np.atleast_2d(cov)
-        self.state = PFState(particles, weights, mean, cov, 0)
+        self.state = PFState(particles=particles, weights=weights, mean=mean, cov=cov, t=0)
         return self.state
 
     def effective_sample_size(self) -> float:
-        """Return current effective sample size Neff.
+        """Return the current Effective Sample Size (ESS).
+
+        Delegates to :func:`~base_ssm.effective_sample_size`.
 
         Returns
         -------
         float
-            Effective sample size.
+            ESS = 1 / Σ w_i^2 in the range [1, Np].
+
+        Raises
+        ------
+        AssertionError
+            If :meth:`initialize` has not been called yet.
+
+        Notes
+        -----
+        Assumes stored particle weights are normalised.
         """
         assert self.state is not None, "Filter not initialized."
-        w = self.state.weights
-        return 1.0 / np.sum(w ** 2)
+        return _ess(self.state.weights)
 
     def _systematic_resample(self, weights: Array) -> Array:
         """Perform systematic resampling.
 
+        Delegates to :func:`~base_ssm.systematic_resample`.
+
         Parameters
         ----------
-        weights : ndarray
-            Particle weights of shape (Np,).
+        weights : ndarray, shape (Np,)
+            Normalized particle weights (sum to 1).
 
         Returns
         -------
-        ndarray
-            Resampled particle indices.
+        ndarray of int, shape (Np,)
+            Resampled ancestor indices.
         """
-        N = len(weights)
-        positions = (self.rng.random() + np.arange(N)) / N
-        indexes = np.zeros(N, dtype=int)
-        cumsum = np.cumsum(weights)
-        cumsum[-1] = 1.0  # avoid round-off error
-        i, j = 0, 0
-        while i < N:
-            if positions[i] < cumsum[j]:
-                indexes[i] = j
-                i += 1
-            else:
-                j += 1
-        return indexes
+        return _systematic_resample(weights, self.rng)
 
     def _multinomial_resample(self, weights: Array) -> Array:
         """Perform multinomial resampling.
 
+        Delegates to :func:`~base_ssm.multinomial_resample`.
+
         Parameters
         ----------
-        weights : ndarray
-            Particle weights of shape (Np,).
+        weights : ndarray, shape (Np,)
+            Normalized particle weights (sum to 1).
 
         Returns
         -------
-        ndarray
-            Resampled particle indices.
+        ndarray of int, shape (Np,)
+            Resampled ancestor indices.
         """
-        return self.rng.choice(len(weights), size=len(weights), p=weights)
+        return _multinomial_resample(weights, self.rng)
 
     def _resample(self, particles: Array, weights: Array) -> Tuple[Array, Array]:
         """Resample particles when degeneracy threshold reached.
@@ -200,7 +236,7 @@ class ParticleFilter:
         tuple of ndarray
             Resampled particles and normalized weights.
         """
-        Neff = 1.0 / np.sum(weights ** 2)
+        Neff = _ess(weights)
         if Neff < self.resample_thresh * self.Np:
             if self.resample_method == "systematic":
                 idx = self._systematic_resample(weights)
@@ -220,13 +256,25 @@ class ParticleFilter:
         return particles, weights
 
     # Core filtering steps
-    def predict(self, u: Optional[Array] = None) -> None:
-        """Propagate particles through the transition model.
+    def predict(self, u: Optional[Array] = None) -> PFState:
+        """Propagate particles through the process model (time-update step).
+
+        Mutates ``self.state`` in-place and returns it.
 
         Parameters
         ----------
         u : ndarray, optional
-            Control input. Default is None.
+            Control input u_{k-1}.  ``None`` if no input.
+
+        Returns
+        -------
+        PFState
+            Current filter state after particle propagation.
+
+        Raises
+        ------
+        AssertionError
+            If :meth:`initialize` has not been called yet.
         """
         assert self.state is not None, "Filter not initialized."
         try:
@@ -235,21 +283,33 @@ class ParticleFilter:
             Lq = np.linalg.cholesky(self.Q + 1e-10 * np.eye(self.nx))
         noise = self.rng.standard_normal((self.Np, self.nx)) @ Lq.T
         self.state.particles = np.array([self.g(x, u) for x in self.state.particles]) + noise
+        return self.state
 
-    def update(self, z: Array) -> PFState:
-        """Update particle weights given measurement z.
+    def update(self, z: Optional[Array] = None) -> PFState:
+        """Update particle weights given a new measurement (measurement-update step).
+
+        Mutates ``self.state`` in-place and returns it.
 
         Parameters
         ----------
-        z : ndarray
-            Measurement of shape (nz,).
+        z : ndarray, shape (nz,)
+            Measurement at the current time step.
 
         Returns
         -------
         PFState
             Updated filter state.
+
+        Raises
+        ------
+        AssertionError
+            If :meth:`initialize` has not been called yet.
+        ValueError
+            If ``z`` is ``None``.
         """
         assert self.state is not None, "Filter not initialized."
+        if z is None:
+            raise ValueError("Observation z must be provided.")
         z = np.asarray(z, float)
         particles = self.state.particles
         weights = self.state.weights
@@ -263,25 +323,24 @@ class ParticleFilter:
         w = np.exp(logw - (m + np.log(np.sum(np.exp(logw - m)))))  # stable normalize
 
         particles, w = self._resample(particles, w)
-        mean = np.average(particles, axis=0, weights=w)
-        cov = np.atleast_2d(np.cov(particles.T, aweights=w, bias=True))
-        self.state = PFState(particles, w, mean, cov, self.state.t + 1)
+        mean, cov = weighted_mean_cov(particles, w)
+        self.state = PFState(particles=particles, weights=w, mean=mean, cov=cov, t=self.state.t + 1)
         return self.state
 
-    def step(self, z: Array, u: Optional[Array] = None) -> PFState:
-        """Run one PF step (predict then update).
+    def step(self, z: Optional[Array] = None, u: Optional[Array] = None) -> PFState:
+        """Run one full PF step: predict then update.
 
         Parameters
         ----------
-        z : ndarray
-            Measurement of shape (nz,).
+        z : ndarray, shape (nz,)
+            Measurement at the current time step.
         u : ndarray, optional
-            Control input. Default is None.
+            Control input (passed to the process model).  Default ``None``.
 
         Returns
         -------
         PFState
-            Updated filter state.
+            Updated filter state after predict + update.
         """
-        self.predict(u)
-        return self.update(z)
+        self.predict(u=u)
+        return self.update(z=z)

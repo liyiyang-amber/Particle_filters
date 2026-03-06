@@ -1,4 +1,29 @@
-"""Kernel Particle Filter implementation."""
+"""Kernel Particle Filter (KPF) implementation.
+
+Implements a matrix-kernel particle flow filter that transports an ensemble
+of particles from the prior to the posterior in pseudo-time s ∈ [0, 1] by
+integrating the velocity field
+
+    f_s(x) = B · (1/N ∑_m [ K(x, x_m) ∇ log p(x_m | y) + ∇_x · K(x, x_m) ])
+
+where K is either a diagonal matrix-valued RBF kernel or an isotropic scalar
+RBF kernel, and B is the (optionally localised) prior sample covariance.
+
+Classes
+-------
+Model              – User-supplied observation model.
+KPFConfig          – Hyper-parameters controlling the flow integration.
+KPFState           – Output container returned by ``KernelParticleFilter.analyze``.
+KernelParticleFilter – Main filter class.
+
+Functions
+---------
+gaspari_cohn             – Gaspari–Cohn correlation taper.
+build_localization_matrix – Construct a Gaspari–Cohn localisation matrix.
+rbf_1d                    – 1-D RBF kernel and x-derivative.
+scalar_kernel_full_matrix – Isotropic scalar kernel with gradient and divergence.
+matrix_kernel_and_divergence – Diagonal matrix-valued kernel and divergence.
+"""
 from dataclasses import dataclass
 from typing import Callable, Optional, Tuple
 import numpy as np
@@ -20,6 +45,11 @@ def gaspari_cohn(r: Array) -> Array:
     -------
     np.ndarray
         Correlation values in [0, 1], same shape as `r`.
+
+    Notes
+    -----
+    Assumes ``r`` represents distances scaled by the localisation radius and
+    is interpreted elementwise.
     """
     r = np.asarray(r, dtype=float)
     out = np.zeros_like(r)
@@ -66,6 +96,11 @@ def build_localization_matrix(n: int, radius: float, metric: Optional[Array] = N
     -------
     np.ndarray
         Localization matrix L with entries in [0,1].
+
+    Notes
+    -----
+    Assumes ``metric`` is a symmetric pairwise-distance matrix when provided.
+    Passing ``np.inf`` disables localisation and returns an all-ones matrix.
     """
     if np.isinf(radius):
         return np.ones((n, n))
@@ -98,6 +133,10 @@ def rbf_1d(d: Array, ell: float) -> Tuple[Array, Array]:
     -------
     (K, dKdx) : Tuple[np.ndarray, np.ndarray]
         K values and derivative wrt x (not z): dK/dx = -(d/ell^2) * K
+
+    Notes
+    -----
+    Assumes ``ell`` is strictly positive.
     """
     s2 = (d / ell) ** 2
     K = np.exp(-0.5 * s2)
@@ -219,6 +258,11 @@ class Model:
         Jacobian of H at x: JH(x) with shape (m, n).
     R : np.ndarray
         Observation noise covariance (m, m), positive definite.
+
+    Notes
+    -----
+    Assumes ``H`` and ``JH`` are consistent with one another and operate on
+    state vectors of the same dimension expected by the filter.
     """
 
     H: ObsFn
@@ -228,7 +272,41 @@ class Model:
 
 @dataclass
 class KPFConfig:
-    """Configuration for KernelParticleFilter."""
+    """Hyper-parameters controlling the kernel particle flow integration.
+
+    Attributes
+    ----------
+    ds_init : float
+        Initial pseudo-time step size.  Default is ``0.2``.
+    ds_min : float
+        Minimum allowed pseudo-time step size.  Default is ``1e-3``.
+    c_move_max : float
+        Maximum allowed per-particle move measured in Mahalanobis norm per
+        step.  Larger moves are scaled down.  Default is ``2.0``.
+    min_steps : int
+        Minimum number of pseudo-time steps regardless of convergence.
+        Default is ``5``.
+    max_steps : int
+        Hard cap on the total number of pseudo-time steps.  Default is ``100``.
+    kernel_type : str
+        Kernel flavour.  ``'diagonal'`` uses a diagonal matrix-valued RBF;
+        ``'scalar'`` uses an isotropic scalar RBF.  Default is ``'diagonal'``.
+    lengthscale_mode : str
+        How to choose RBF lengthscales.  ``'std'`` sets each dimension's
+        lengthscale to the ensemble standard deviation; ``'fixed'`` uses
+        ``fixed_lengthscale``.  Default is ``'std'``.
+    fixed_lengthscale : float
+        Lengthscale used when ``lengthscale_mode='fixed'``.  Default is ``1.0``.
+    reg : float
+        Tikhonov regularisation added to the sample covariance before
+        inversion.  Default is ``1e-6``.
+    localization_radius : float
+        Gaspari–Cohn cutoff radius in state-space units.  ``np.inf`` disables
+        localisation.  Default is ``np.inf``.
+    random_order : bool
+        If ``True``, shuffle the particle evaluation order at each pseudo-time
+        step.  Default is ``True``.
+    """
     ds_init: float = 0.2          # initial pseudo-time step
     ds_min: float = 1e-3          # minimum step size
     c_move_max: float = 2.0       # max allowed move in Mahalanobis norm per step
@@ -244,7 +322,21 @@ class KPFConfig:
 
 @dataclass
 class KPFState:
-    """Container for the kernel particle filter state."""
+    """Output state returned by ``KernelParticleFilter.analyze``.
+
+    Attributes
+    ----------
+    particles : ndarray, shape (Np, n)
+        Posterior particle ensemble after the flow.
+    weights : ndarray, shape (Np,)
+        Particle weights (uniform, i.e. ``1/Np``, after the flow).
+    s : float
+        Final pseudo-time reached (should be ≈ 1.0 on successful completion).
+    steps : int
+        Number of pseudo-time integration steps taken.
+    ds_history : list of float, optional
+        Adaptive step sizes used at each pseudo-time step (for diagnostics).
+    """
     particles: Array  # (Np, n)
     weights: Array    # (Np,) 
     s: float          # current pseudo-time in [0,1]
@@ -255,14 +347,19 @@ class KPFState:
 # Kernel Particle Filter
 class KernelParticleFilter:
     """Matrix-kernel Particle Flow Filter.
-    
-    This class moves an ensemble of particles from prior to posterior by
-    integrating a velocity field f_s(x) in pseudo-time s ∈ [0,1].
-    
-    The flow uses:
-        f_s(x) = B * ( 1/N ∑_{m=1}^N [ K(x, x_m) * ∇ log p(x_m | y) + ∇_x·K(x, x_m) ] )
-    where K is a diagonal matrix-valued RBF kernel and B is the (localized) 
-    prior covariance matrix.
+
+    Transports an ensemble of ``Np`` particles from a prior distribution to
+    an approximate posterior by integrating a deterministic velocity field in
+    pseudo-time s ∈ [0, 1].  The velocity field uses a (diagonal or scalar)
+    RBF kernel and the prior sample covariance to define the flow direction,
+    optionally with Gaspari–Cohn spatial localisation.
+
+    Parameters
+    ----------
+    model : Model
+        User-supplied observation model containing ``H``, ``JH``, and ``R``.
+    config : KPFConfig, optional
+        Filter hyper-parameters.  Defaults to ``KPFConfig()`` if not supplied.
     """
 
     def __init__(self, model: Model, config: Optional[KPFConfig] = None):
@@ -272,7 +369,22 @@ class KernelParticleFilter:
     # helpers 
     @staticmethod
     def mean_and_cov(X: Array, reg: float = 0.0) -> Tuple[Array, Array]:
-        """Compute mean and covariance with optional ridge regularization."""
+        """Compute ensemble mean and sample covariance with optional regularisation.
+
+        Parameters
+        ----------
+        X : ndarray, shape (Np, n)
+            Ensemble matrix.
+        reg : float, optional
+            Ridge regularisation added to the diagonal.  Default is ``0.0``.
+
+        Returns
+        -------
+        mu : ndarray, shape (n,)
+            Ensemble mean.
+        B : ndarray, shape (n, n)
+            Sample covariance (optionally regularised).
+        """
         mu = X.mean(axis=0)
         A = X - mu
         B = (A.T @ A) / max(1, X.shape[0] - 1)
@@ -282,11 +394,37 @@ class KernelParticleFilter:
 
     @staticmethod
     def schur(A: Array, B: Array) -> Array:
-        """Elementwise (Hadamard) product."""
+        """Return the elementwise (Hadamard) product of two arrays.
+
+        Parameters
+        ----------
+        A : ndarray
+            First array.
+        B : ndarray
+            Second array, same shape as ``A``.
+
+        Returns
+        -------
+        ndarray
+            Elementwise product ``A ⊙ B``.
+        """
         return np.multiply(A, B)
 
     def _prior_stats(self, X: Array) -> Tuple[Array, Array]:
-        """Compute prior mean and covariance with optional localization."""
+        """Compute prior mean and localised sample covariance.
+
+        Parameters
+        ----------
+        X : ndarray, shape (Np, n)
+            Current particle ensemble.
+
+        Returns
+        -------
+        x0 : ndarray, shape (n,)
+            Ensemble mean.
+        B_loc : ndarray, shape (n, n)
+            Gaspari–Cohn-localised sample covariance (regularised).
+        """
         x0, B = self.mean_and_cov(X, reg=self.cfg.reg)
         n = B.shape[0]
         L = build_localization_matrix(n, self.cfg.localization_radius)
@@ -294,7 +432,22 @@ class KernelParticleFilter:
         return x0, B_loc
 
     def _lengthscales(self, X: Array, mode: str) -> Array:
-        """Choose per-dimension RBF lengthscales."""
+        """Choose per-dimension RBF lengthscales for the kernel.
+
+        Parameters
+        ----------
+        X : ndarray, shape (Np, n)
+            Current particle ensemble.
+        mode : str
+            ``'fixed'`` returns ``cfg.fixed_lengthscale`` for every dimension;
+            ``'std'`` uses the per-dimension ensemble standard deviation
+            (with a small floor of ``1e-12``).
+
+        Returns
+        -------
+        ndarray, shape (n,)
+            Per-dimension lengthscales.
+        """
         if mode == "fixed":
             return np.full(X.shape[1], self.cfg.fixed_lengthscale, dtype=float)
         # std mode: per-dimension ensemble std with floor
@@ -302,9 +455,28 @@ class KernelParticleFilter:
         return std
 
     def _score(self, x: Array, x0: Array, B_inv: Array, y: Array) -> Array:
-        """Compute ∇ log p(x | y) using Gaussian prior and nonlinear likelihood.
-        
-        ∇ log p(x|y) = JH(x)^T R^{-1} (y - H(x)) - B^{-1} (x - x0)
+        """Compute the log-posterior gradient ∇ log p(x | y).
+
+        Uses a Gaussian prior ``p(x) = N(x0, B)`` and a nonlinear likelihood
+        with observation function ``H`` and noise covariance ``R``::
+
+            ∇ log p(x | y) = JH(x)ᵀ R⁻¹ (y − H(x)) − B⁻¹ (x − x0)
+
+        Parameters
+        ----------
+        x : ndarray, shape (n,)
+            State at which to evaluate the score.
+        x0 : ndarray, shape (n,)
+            Prior mean.
+        B_inv : ndarray, shape (n, n)
+            Inverse prior covariance.
+        y : ndarray, shape (m,)
+            Observation vector.
+
+        Returns
+        -------
+        ndarray, shape (n,)
+            Score vector ∇ log p(x | y).
         """
         Hx = self.model.H(x)              # (m,)
         J = self.model.JH(x)              # (m, n)
@@ -317,7 +489,20 @@ class KernelParticleFilter:
         return g
 
     def _mahalanobis(self, dx: Array, B_inv: Array) -> float:
-        """Return sqrt(dx^T B_inv dx)."""
+        """Return the Mahalanobis norm ``sqrt(dxᵀ B⁻¹ dx)``.
+
+        Parameters
+        ----------
+        dx : ndarray, shape (n,)
+            Displacement vector.
+        B_inv : ndarray, shape (n, n)
+            Inverse covariance matrix.
+
+        Returns
+        -------
+        float
+            Mahalanobis norm of ``dx``.
+        """
         return float(np.sqrt(dx @ (B_inv @ dx)))
 
 

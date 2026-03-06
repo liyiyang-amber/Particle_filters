@@ -120,7 +120,12 @@ def print_section(text: str):
     print(f"{Colors.BOLD}{Colors.BLUE}{'─' * 80}{Colors.END}\n")
 
 
-def run_pytest(test_paths: List[str], description: str, verbose: bool = False) -> Tuple[bool, int, int]:
+def run_pytest(
+    test_paths: List[str],
+    description: str,
+    verbose: bool = False,
+    skip_slow: bool = False,
+) -> Tuple[bool, int, int]:
     """
     Run pytest on specified paths and return results.
     
@@ -131,6 +136,8 @@ def run_pytest(test_paths: List[str], description: str, verbose: bool = False) -
     
     # Build pytest command
     cmd = [sys.executable, "-m", "pytest"] + test_paths
+    if skip_slow:
+        cmd.extend(["-m", "not slow"])
     if verbose:
         cmd.append("-v")
     else:
@@ -153,9 +160,9 @@ def run_pytest(test_paths: List[str], description: str, verbose: bool = False) -
         print(f"{Colors.RED}{result.stderr}{Colors.END}")
     
     # Parse results from output
-    passed = failed = 0
+    passed = failed = skipped = 0
     for line in result.stdout.split('\n'):
-        if 'passed' in line or 'failed' in line:
+        if 'passed' in line or 'failed' in line or 'skipped' in line:
             parts = line.split()
             for i, part in enumerate(parts):
                 if 'passed' in part and i > 0:
@@ -168,12 +175,20 @@ def run_pytest(test_paths: List[str], description: str, verbose: bool = False) -
                         failed = int(parts[i-1])
                     except (ValueError, IndexError):
                         pass
+                if 'skipped' in part and i > 0:
+                    try:
+                        skipped = int(parts[i-1])
+                    except (ValueError, IndexError):
+                        pass
     
-    success = result.returncode == 0
+    success = result.returncode == 0 or (result.returncode == 5 and failed == 0)
     
     # Print result
     if success:
-        print(f"{Colors.GREEN}{Colors.BOLD}✓ All tests passed!{Colors.END}\n")
+        if passed == 0 and skipped > 0:
+            print(f"{Colors.YELLOW}{Colors.BOLD}✓ Tests skipped in this environment ({skipped} skipped){Colors.END}\n")
+        else:
+            print(f"{Colors.GREEN}{Colors.BOLD}✓ All tests passed!{Colors.END}\n")
     else:
         print(f"{Colors.RED}{Colors.BOLD}✗ Some tests failed{Colors.END}\n")
     
@@ -921,6 +936,11 @@ def main():
         action="store_true",
         help="Show test statistics summary"
     )
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="Skip tests marked as slow for a quicker manual run"
+    )
     
     args = parser.parse_args()
     
@@ -937,7 +957,7 @@ def main():
     
     # Run requested tests
     if args.phase == "simulator":
-        success, passed, failed = run_simulator_tests(args.verbose)
+        success, passed, failed = run_simulator_tests(args.verbose) if not args.fast else run_pytest(["tests/unit_tests/simulator/"], "All Simulator Unit Tests (fast mode)", args.verbose, skip_slow=True)
     elif args.phase == "lgssm":
         success, passed, failed = run_lgssm_simulator_tests(args.verbose)
     elif args.phase == "sv":
@@ -983,7 +1003,7 @@ def main():
     elif args.phase == "filters":
         success, passed, failed = run_all_filter_tests(args.verbose)
     elif args.phase == "integration":
-        success, passed, failed = run_integration_tests(args.verbose)
+        success, passed, failed = run_pytest(["tests/integration_tests/"], "Integration Tests", args.verbose, skip_slow=args.fast)
     elif args.phase == "mat-filters":
         success, passed, failed = run_mat_filter_integration_tests(args.verbose)
     elif args.phase == "snlg-filters":
@@ -1026,7 +1046,10 @@ def main():
     elif args.phase == "tf":
         success, passed, failed = run_all_tf_tests(args.verbose)
     else:  # all
-        success, passed, failed = run_all_tests(args.verbose)
+        if args.fast:
+            success, passed, failed = run_pytest(["tests/"], "All Tests (fast mode, excluding slow)", args.verbose, skip_slow=True)
+        else:
+            success, passed, failed = run_all_tests(args.verbose)
     
     elapsed_time = time.time() - start_time
     

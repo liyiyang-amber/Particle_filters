@@ -31,6 +31,7 @@ Tensor = tf.Tensor
 
 # Helpers
 def _to_f32(x) -> Tensor:
+    """Cast *x* to a ``tf.float32`` tensor."""
     return tf.cast(tf.convert_to_tensor(x), F32)
 
 # Systematic resampling (fully vectorised, @tf.function-compatible)
@@ -39,7 +40,20 @@ def _to_f32(x) -> Tensor:
     tf.TensorSpec(shape=[], dtype=tf.int32),
 ])
 def systematic_resample_tf(weights: Tensor, seed: Tensor) -> Tensor:
-    """Systematic resampling; returns integer ancestor indices (N,)."""
+    """Systematic resampling; returns integer ancestor indices.
+
+    Parameters
+    ----------
+    weights : Tensor, shape (N,)
+        Non-negative particle weights (need not be normalised).
+    seed : Tensor, scalar int32
+        Seed for the single uniform draw.
+
+    Returns
+    -------
+    Tensor, shape (N,)
+        Integer ancestor indices in ``[0, N-1]``.
+    """
     N      = tf.shape(weights)[0]
     N_f    = tf.cast(N, F32)
     w      = weights / tf.reduce_sum(weights)
@@ -54,17 +68,21 @@ def systematic_resample_tf(weights: Tensor, seed: Tensor) -> Tensor:
 # Weight update kernel
 @tf.function
 def _log_gaussian_likelihood(z: Tensor, z_pred: Tensor, L_R: Tensor) -> Tensor:
-    """Batch log N(z | z_pred_i, R) for all particles.
+    """Compute batch log-likelihoods log N(z | z_pred_i, R) for all particles.
 
     Parameters
     ----------
-    z       : (nz,)    observation
-    z_pred  : (N, nz)  predicted observations for each particle
-    L_R     : (nz, nz) Cholesky of R
+    z : Tensor, shape (nz,)
+        Observation vector.
+    z_pred : Tensor, shape (N, nz)
+        Predicted observations for each of the N particles.
+    L_R : Tensor, shape (nz, nz)
+        Lower Cholesky factor of the measurement-noise covariance ``R``.
 
     Returns
     -------
-    (N,) log-likelihoods
+    Tensor, shape (N,)
+        Per-particle log-likelihood values.
     """
     nz_f  = tf.cast(tf.shape(z)[0], F32)
     diff  = z[None, :] - z_pred                          # (N, nz)
@@ -79,11 +97,28 @@ def _log_gaussian_likelihood(z: Tensor, z_pred: Tensor, L_R: Tensor) -> Tensor:
 
 # Particle filter state
 @dataclass
+@dataclass
 class PFStateTF:
-    particles: Tensor   # (N, nx)
-    weights:   Tensor   # (N,)
-    mean:      Tensor   # (nx,)
-    cov:       Tensor   # (nx, nx)
+    """State container for ``ParticleFilterTF``.
+
+    Attributes
+    ----------
+    particles : Tensor, shape (N, nx)
+        Current particle ensemble.
+    weights : Tensor, shape (N,)
+        Normalised particle weights.
+    mean : Tensor, shape (nx,)
+        Weighted mean of the ensemble.
+    cov : Tensor, shape (nx, nx)
+        Weighted sample covariance of the ensemble.
+    t : int
+        Current time step index.
+    """
+
+    particles: tf.Tensor
+    weights:   tf.Tensor
+    mean:      tf.Tensor
+    cov:       tf.Tensor
     t:         int
 
 
@@ -91,21 +126,41 @@ class PFStateTF:
 class ParticleFilterTF:
     """Vectorised SIR Particle Filter in TensorFlow.
 
+    Implements Sequential Importance Resampling (SIR) with optional
+    systematic or Sinkhorn-OT resampling, compiled with ``@tf.function``
+    for efficiency.
+
     Parameters
     ----------
-    g              : (N, nx), u -> (N, nx)   vectorised process function
-                     OR  (nx,), u -> (nx,)   per-particle (map_fn is used)
-    h_vectorised   : (N, nx) -> (N, nz)      vectorised observation function
-    Q              : (nx, nx) process noise covariance
-    R              : (nz, nz) measurement noise covariance
-    n_particles    : number of particles
-    resample_thresh: resample when ESS < thresh * N  (0 disables resampling)
-    use_ot         : use Sinkhorn-OT instead of systematic resampling
-    ot_epsilon     : Sinkhorn regularisation
-    ot_iters       : Sinkhorn iterations
-    random_seed    : base seed for reproducibility
-    vectorised_g   : if True, g(particles, u) is fully vectorised (faster);
-                     if False, tf.map_fn is used
+    g : callable
+        Process function.  If ``vectorised_g=True``, signature is
+        ``(particles, u) -> particles`` where ``particles`` has shape
+        ``(N, nx)``; otherwise signature is ``(x, u) -> x_next`` and
+        ``tf.map_fn`` is applied.
+    h_vectorised : callable
+        Observation function with vectorised signature
+        ``(N, nx) -> (N, nz)``.
+    Q : ndarray, shape (nx, nx)
+        Process-noise covariance.
+    R : ndarray, shape (nz, nz)
+        Measurement-noise covariance.
+    n_particles : int, optional
+        Number of particles.  Default is ``1000``.
+    resample_thresh : float, optional
+        Resample when ``ESS < thresh * N``.  Set to ``0`` to disable.
+        Default is ``0.5``.
+    use_ot : bool, optional
+        Use Sinkhorn-OT resampling instead of systematic.  Default is
+        ``False``.
+    ot_epsilon : float, optional
+        Sinkhorn regularisation parameter.  Default is ``0.1``.
+    ot_iters : int, optional
+        Number of Sinkhorn iterations.  Default is ``50``.
+    random_seed : int, optional
+        Base seed for reproducibility.  Default is ``0``.
+    vectorised_g : bool, optional
+        If ``True``, ``g`` is assumed to be fully vectorised (faster).
+        Default is ``False``.
     """
 
     def __init__(
@@ -150,6 +205,20 @@ class ParticleFilterTF:
     # ---- initialisation ----
 
     def initialize(self, mean0: np.ndarray, cov0: np.ndarray) -> PFStateTF:
+        """Initialise the particle ensemble from a Gaussian prior.
+
+        Parameters
+        ----------
+        mean0 : ndarray, shape (nx,)
+            Prior mean.
+        cov0 : ndarray, shape (nx, nx)
+            Prior covariance.
+
+        Returns
+        -------
+        PFStateTF
+            Initial filter state with ``t = 0``.
+        """
         m0 = _to_f32(mean0)
         P0 = _to_f32(cov0)
         L0 = tf.linalg.cholesky(P0 + 1e-12 * tf.eye(self.nx, dtype=F32))
@@ -166,7 +235,20 @@ class ParticleFilterTF:
     # ---- core step ----
 
     def step(self, z: np.ndarray, u: Optional[np.ndarray] = None) -> PFStateTF:
-        """Run one SIR step: propagate → reweight → (optional) resample."""
+        """Run one SIR step: propagate → reweight → (optional) resample.
+
+        Parameters
+        ----------
+        z : ndarray, shape (nz,)
+            Current observation.
+        u : ndarray, optional
+            Control input passed to the process function.  Default is ``None``.
+
+        Returns
+        -------
+        PFStateTF
+            Updated filter state.
+        """
         assert self._state is not None, "Call initialize() first."
         particles = self._state.particles
         weights   = self._state.weights
@@ -222,6 +304,22 @@ class ParticleFilterTF:
 
     @staticmethod
     def _weighted_stats(x: Tensor, w: Tensor) -> Tuple[Tensor, Tensor]:
+        """Compute weighted mean and covariance of a particle ensemble.
+
+        Parameters
+        ----------
+        x : Tensor, shape (N, nx)
+            Particle positions.
+        w : Tensor, shape (N,)
+            Non-negative weights (normalised internally).
+
+        Returns
+        -------
+        mean : Tensor, shape (nx,)
+            Weighted mean.
+        cov : Tensor, shape (nx, nx)
+            Weighted sample covariance (symmetrised).
+        """
         w    = w / tf.reduce_sum(w)
         mean = tf.reduce_sum(x * w[:, None], axis=0)
         xc   = x - mean[None, :]
@@ -239,21 +337,29 @@ def run_particle_filter_tf(
     cov0:  np.ndarray,
     U:    Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Run the PF over all observations.
+    """Run the particle filter over a full observation sequence.
 
     Parameters
     ----------
-    pf     : initialised ParticleFilterTF
-    Y      : (T, nz) observations
-    mean0  : (nx,) prior mean
-    cov0   : (nx, nx) prior covariance
-    U      : (T, nu) optional controls
+    pf : ParticleFilterTF
+        Initialised particle filter object.
+    Y : ndarray, shape (T, nz)
+        Observation sequence.
+    mean0 : ndarray, shape (nx,)
+        Prior mean.
+    cov0 : ndarray, shape (nx, nx)
+        Prior covariance.
+    U : ndarray, shape (T, nu), optional
+        Control inputs.  Pass ``None`` if the model has no controls.
 
     Returns
     -------
-    means : (T, nx)
-    covs  : (T, nx, nx)
-    ess   : (T,)  effective sample sizes
+    means : ndarray, shape (T, nx)
+        Filtered state means.
+    covs : ndarray, shape (T, nx, nx)
+        Filtered state covariances.
+    ess : ndarray, shape (T,)
+        Effective sample size at each time step.
     """
     pf.initialize(mean0, cov0)
     T     = Y.shape[0]

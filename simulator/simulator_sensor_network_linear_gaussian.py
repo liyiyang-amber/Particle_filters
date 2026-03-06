@@ -44,6 +44,11 @@ class SimConfig:
         Observation noise standard deviations.
     seed : int
         Seed for the random number generator.
+
+    Notes
+    -----
+    Assumes ``d`` is a perfect square and all scalar hyperparameters define a
+    stable simulation after validation in :meth:`__post_init__`.
     """
 
     d: int = 64
@@ -87,6 +92,11 @@ def make_grid_coords(d: int) -> Array:
     -------
     ndarray
         Array of shape (d, 2) with [x, y] grid coordinates.
+
+    Notes
+    -----
+    Assumes ``d`` is a perfect square so the coordinates can be arranged on a
+    square lattice.
     """
     n = int(np.sqrt(d))
     xs, ys = np.meshgrid(np.arange(n), np.arange(n), indexing="ij")
@@ -114,6 +124,11 @@ def se_kernel_cov(coords: Array, alpha0: float, beta: float, alpha1: float) -> A
     -------
     ndarray
         Symmetric positive definite (d, d) covariance matrix.
+
+    Notes
+    -----
+    Assumes ``beta`` is positive and ``coords`` contains one row per spatial
+    location.
     """
     diff = coords[:, None, :] - coords[None, :, :]
     dist2 = np.sum(diff * diff, axis=-1)
@@ -145,6 +160,11 @@ def cholesky_with_jitter(S: Array, max_tries: int = 5, base_jitter: float = 1e-1
     ------
     np.linalg.LinAlgError
         If factorization fails after max_tries.
+
+    Notes
+    -----
+    Assumes ``S`` is symmetric and close enough to SPD that diagonal jitter can
+    recover a valid Cholesky factor.
     """
     jitter = 0.0
     for i in range(max_tries):
@@ -176,6 +196,11 @@ def simulate_dataset(cfg: SimConfig) -> Tuple[Array, Array, Array, Array]:
             - Z: (S, R, T,   d), observations
             - coords: (d, 2), grid coordinates
             - Sigma: (d, d), process noise covariance
+
+    Notes
+    -----
+    Assumes independent trials for each observation-noise level and shared
+    spatial process covariance across all trials.
     """
     rng = np.random.default_rng(cfg.seed)
     S = len(cfg.sigmas)
@@ -229,6 +254,15 @@ def save_npz(
         Process covariance, shape (d, d).
     cfg: SimConfig
         Configuration used to generate the data.
+
+    Returns
+    -------
+    None
+        Writes the supplied arrays and metadata to disk.
+
+    Notes
+    -----
+    Assumes the parent directory of ``path`` already exists.
     """
     np.savez_compressed(
         path,
@@ -252,6 +286,11 @@ def dump_config_json(path: str, cfg: SimConfig) -> None:
     ----------
     path: Output file path for the JSON.
     cfg: Configuration to serialize.
+
+    Returns
+    -------
+    None
+        Writes a JSON representation of ``cfg`` to disk.
     """
     with open(path, "w", encoding="utf-8") as f:
         json.dump(asdict(cfg), f, indent=2)

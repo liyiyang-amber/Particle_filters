@@ -1,5 +1,14 @@
 """
-Differentiable Particle Filter with RNN-based Resampling
+Differentiable Particle Filter with RNN-based resampling.
+
+Implements a differentiable particle filter where the resampling step is
+replaced by an RNN that learns a differentiable assignment distribution over
+ancestor particles.  An optional baseline mode substitutes a simple
+soft weight-based resampling (no network required) for ablation or comparison.
+
+Classes
+-------
+DifferentiableParticleFilterRNN – Main filter class (``tf.Module`` subclass).
 """
 
 import numpy as np
@@ -7,6 +16,19 @@ import tensorflow as tf
 
 
 class DifferentiableParticleFilterRNN(tf.Module):
+    """Differentiable Particle Filter with RNN-based resampling.
+
+    An RNN network processes the current particle ensemble and importance
+    weights to produce a learned assignment distribution over ancestor
+    particles.  The new particles are generated as barycentres of the old
+    particles under this distribution, making the resampling step fully
+    differentiable.
+
+    When ``use_baseline_resampling=True`` the RNN is not built and a simple
+    soft weight-based resampling (Gumbel-Softmax) is used instead, providing
+    a fair comparison without requiring training.
+    """
+
     def __init__(
         self,
         n_particles,
@@ -167,23 +189,24 @@ class DifferentiableParticleFilterRNN(tf.Module):
         print(f"  Note: Training is still recommended for optimal performance")
 
     def _compute_rnn_features(self, particles, log_weights, target_particle_idx=None):
-        """Compute input features for RNN from particles and weights.
+        """Compute input features for the RNN from particles and weights.
 
         Parameters
         ----------
-        particles: Tensor
-            Particle states of shape (B, N, state_dim).
-        log_weights: Tensor
-            Log-weights of shape (B, N).
-        target_particle_idx: int, optional
-            Index of the new particle being generated.
-            If provided, adds one-hot encoding to distinguish which new particle
-            is being created. Defaults to None.
+        particles : Tensor, shape (B, N, state_dim)
+            Particle states.
+        log_weights : Tensor, shape (B, N)
+            Log-weights (need not be normalised).
+        target_particle_idx : int, optional
+            Index of the new particle being generated.  When provided, a one-hot
+            encoding of this index is appended to the features so the RNN can
+            distinguish which output particle it is computing.  Default is
+            ``None``.
 
         Returns
-        ----------
-        Tensor
-            Features of shape (B, N, feature_dim).
+        -------
+        Tensor, shape (B, N, feature_dim)
+            Concatenated feature vectors for each old particle.
         """
         batch_size = tf.shape(particles)[0]
         N = self.n_particles
@@ -216,19 +239,26 @@ class DifferentiableParticleFilterRNN(tf.Module):
     
     def _baseline_resample(self, particles, log_weights):
         """Simple baseline resampling using soft weight-based assignments.
-        
+
+        Provides a drop-in replacement for the RNN resampler that does not
+        require training.  Assignment probabilities are obtained via a
+        Gumbel-Softmax applied to the normalised importance weights.
+
         Parameters
         ----------
-        particles: Tensor
-            Current particles of shape (B, N, state_dim).
-        log_weights: Tensor
-            Current log weights of shape (B, N).
+        particles : Tensor, shape (B, N, state_dim)
+            Current particle states.
+        log_weights : Tensor, shape (B, N)
+            Current log-weights.
 
         Returns
-        ----------
-        Tuple[Tensor, Tensor]
-            Resampled particles of shape (B, N, state_dim) and
-            assignment probabilities of shape (B, N, N).
+        -------
+        new_particles : Tensor, shape (B, N, state_dim)
+            Resampled particles via barycentric projection.
+        assignment_probs : Tensor, shape (B, N, N)
+            Assignment probability matrix where entry ``[b, i, j]`` is the
+            probability that new particle ``i`` originates from old particle
+            ``j``.
         """
         batch_size = tf.shape(particles)[0]
         N = self.n_particles
@@ -261,20 +291,28 @@ class DifferentiableParticleFilterRNN(tf.Module):
         return new_particles, assignment_probs
 
     def _rnn_resample(self, particles, log_weights):
-        """Perform RNN-based resampling.
+        """Perform RNN-based differentiable resampling.
+
+        For each new particle ``i``, the RNN processes the sequence of old
+        particles (with features) and produces logits over ancestor indices.
+        The assignment probabilities are obtained by a softmax with
+        ``self.temperature``, and new particles are the resulting barycentres.
 
         Parameters
         ----------
-        particles: Tensor
-            Current particles of shape (B, N, state_dim).
-        log_weights: Tensor
-            Current log weights of shape (B, N).
+        particles : Tensor, shape (B, N, state_dim)
+            Current particle states.
+        log_weights : Tensor, shape (B, N)
+            Current log-weights.
 
         Returns
-        ----------
-        Tuple[Tensor, Tensor]
-            Resampled particles via barycentric projection of shape (B, N, state_dim) and assignment probabilities of shape (B, N, N) where
-            assignment_matrix[b, i, j] = P(new_particle_i comes from old_particle_j).
+        -------
+        new_particles : Tensor, shape (B, N, state_dim)
+            Resampled particles via barycentric projection.
+        assignment_probs : Tensor, shape (B, N, N)
+            Assignment probability matrix where entry ``[b, i, j]`` is the
+            probability that new particle ``i`` originates from old particle
+            ``j``.
         """
         # Use baseline resampling if flag is set
         if self.use_baseline_resampling:
@@ -352,21 +390,24 @@ class DifferentiableParticleFilterRNN(tf.Module):
     # Utilities
     @staticmethod
     def _log_normalize(log_w, axis=-1, keepdims=False):
-        """Normalize log-weights along given axis.
+        """Normalise log-weights along a given axis.
 
         Parameters
         ----------
-        log_w: Tensor
-            Log-weights to normalize.
-        axis: int, optional
-            Axis along which to normalize. Defaults to -1.
-        keepdims: bool, optional
-            Whether to keep dimensions. Defaults to False.
+        log_w : Tensor
+            Log-weights to normalise.
+        axis : int, optional
+            Axis along which to normalise.  Default is ``-1``.
+        keepdims : bool, optional
+            If ``True``, keep the reduced axis as a size-1 dimension.
+            Default is ``False``.
 
         Returns
-        ----------
-        Tuple[Tensor, Tensor]
-            Normalized log-weights and log normalization constant.
+        -------
+        log_w_norm : Tensor
+            Normalised log-weights (same shape as input).
+        log_z : Tensor
+            Log normalisation constant (shape with ``axis`` removed or kept).
         """
         log_z = tf.reduce_logsumexp(log_w, axis=axis, keepdims=True)
         log_w_norm = log_w - log_z
@@ -380,13 +421,13 @@ class DifferentiableParticleFilterRNN(tf.Module):
 
         Parameters
         ----------
-        log_weights: Tensor
-            Log-weights of shape (B, N).
+        log_weights : Tensor, shape (B, N)
+            Log-weights (need not be normalised).
 
         Returns
-        ----------
-        Tensor
-            Effective Sample Size for each batch, shape (B,).
+        -------
+        Tensor, shape (B,)
+            Effective Sample Size per batch element.
         """
         # Normalize weights
         weights = tf.exp(log_weights)  # (B, N)
@@ -398,17 +439,17 @@ class DifferentiableParticleFilterRNN(tf.Module):
     
     @staticmethod
     def compute_weight_entropy(log_weights):
-        """Compute the entropy of the weight distribution.
+        """Compute the Shannon entropy of the weight distribution.
 
         Parameters
         ----------
-        log_weights: Tensor 
-            Log-weights of shape (B, N).
+        log_weights : Tensor, shape (B, N)
+            Log-weights (need not be normalised).
 
         Returns
-        ----------
-        Tensor
-            Entropy for each batch, shape (B,).
+        -------
+        Tensor, shape (B,)
+            Entropy per batch element.
         """
         # Normalize weights
         weights = tf.exp(log_weights)  # (B, N)
@@ -426,22 +467,23 @@ class DifferentiableParticleFilterRNN(tf.Module):
     # Initialization
     
     def init_particles(self, batch_size, init_mean, init_cov_chol):
-        """Initialize particles from a Gaussian prior N(init_mean, init_cov).
+        """Initialise particles from a Gaussian prior N(init_mean, init_cov).
 
         Parameters
         ----------
-        batch_size: int 
+        batch_size : int
             Number of parallel sequences B.
-        init_mean: Tensor
-            Prior mean of shape (state_dim,) or (B, state_dim).
-        init_cov_chol: Tensor
-            Lower Cholesky factor of prior covariance,
-            shape (state_dim, state_dim) or (B, state_dim, state_dim).
+        init_mean : Tensor, shape (state_dim,) or (B, state_dim)
+            Prior mean vector.
+        init_cov_chol : Tensor, shape (state_dim, state_dim) or (B, state_dim, state_dim)
+            Lower Cholesky factor of the prior covariance.
 
         Returns
-        ----------
-        Tuple[Tensor, Tensor] 
-            Particles of shape (B, N, state_dim) and log-weights of shape (B, N).
+        -------
+        particles : Tensor, shape (B, N, state_dim)
+            Initial particle ensemble.
+        log_weights : Tensor, shape (B, N)
+            Uniform initial log-weights ``log(1/N)``.
         """
         N, d = self.n_particles, self.state_dim
 
@@ -480,25 +522,30 @@ class DifferentiableParticleFilterRNN(tf.Module):
 
         Parameters
         ----------
-        particles: Tensor
-            Previous particle states of shape (B, N, d).
-        log_weights: Tensor
-            Previous log weights of shape (B, N).
-        observation: Tensor
-            Current observation of shape (B, obs_dim).
-        params: dict, optional
-            Parameters passed to transition and likelihood functions. Defaults to None.
-        return_ess: bool, optional 
-            If True, also return ESS and entropy before and after resampling. Defaults to False.
+        particles : Tensor, shape (B, N, d)
+            Previous particle states.
+        log_weights : Tensor, shape (B, N)
+            Previous log-weights (need not be normalised).
+        observation : Tensor, shape (B, obs_dim)
+            Current observation.
+        params : dict, optional
+            Parameters forwarded to the transition and likelihood functions.
+            Default is ``None`` (empty dict).
+        return_ess : bool, optional
+            If ``True``, return ESS and entropy before and after resampling as
+            a fourth element.  Default is ``False``.
 
         Returns
-        ----------
-        Tuple
-            If return_ess is False, returns (new_particles, new_log_weights, assignment_matrix).
-                new_particles has shape (B, N, d), new_log_weights has shape (B, N),
-                assignment_matrix has shape (B, N, N).
-            If return_ess is True, also returns ess_dict as fourth element containing
-                'ess_before', 'ess_after', 'entropy_before', 'entropy_after'.
+        -------
+        new_particles : Tensor, shape (B, N, d)
+            Updated particle states.
+        new_log_weights : Tensor, shape (B, N)
+            Uniform log-weights after resampling.
+        assignment_matrix : Tensor, shape (B, N, N)
+            Assignment probability matrix from the RNN resampler.
+        ess_dict : dict
+            Keys ``'ess_before'``, ``'ess_after'``, ``'entropy_before'``,
+            ``'entropy_after'`` (only returned when ``return_ess=True``).
         """
         if params is None:
             params = {}
@@ -541,29 +588,35 @@ class DifferentiableParticleFilterRNN(tf.Module):
     
     # Full filtering over a sequence
     def filter(self, observations, init_mean, init_cov_chol, params=None, return_ess=False):
-        """Run differentiable particle filter with RNN resampling over a sequence.
+        """Run the differentiable RNN particle filter over a sequence of observations.
 
         Parameters
         ----------
-        observations: Tensor
-            Observation sequence of shape (B, T, obs_dim).
-        init_mean: Tensor
-            Initial prior mean, see init_particles.
-        init_cov_chol: Tensor 
-            Initial prior covariance Cholesky factor, see init_particles.
-        params: dict, optional 
-            Parameters for transition and likelihood functions.
-                Can be static or contain time-dependent tensors. Defaults to None.
-        return_ess: bool, optional
-            If True, also return ESS and entropy statistics over time. Defaults to False.
+        observations : Tensor, shape (B, T, obs_dim)
+            Full observation sequence.
+        init_mean : Tensor, shape (state_dim,) or (B, state_dim)
+            Initial prior mean; see ``init_particles``.
+        init_cov_chol : Tensor, shape (state_dim, state_dim) or (B, state_dim, state_dim)
+            Lower Cholesky factor of the initial prior covariance; see
+            ``init_particles``.
+        params : dict, optional
+            Parameters forwarded to transition and likelihood functions.
+            Default is ``None`` (empty dict).
+        return_ess : bool, optional
+            If ``True``, also return ESS and entropy statistics over time.
+            Default is ``False``.
 
         Returns
-        ----------
-        Tuple
-            If return_ess is False, returns (particles_seq, logw_seq, assignment_matrices).
-                particles_seq has shape (B, T+1, N, d), logw_seq has shape (B, T+1, N),
-                assignment_matrices has shape (B, T, N, N).
-            If return_ess is True, also returns ess_stats dict as fourth element.
+        -------
+        particles_seq : Tensor, shape (B, T+1, N, d)
+            Particle ensemble at every time step (t = 0 … T).
+        logw_seq : Tensor, shape (B, T+1, N)
+            Log-weights at every time step.
+        assignment_matrices : Tensor, shape (B, T, N, N)
+            Assignment matrices produced by the RNN at each step.
+        ess_stats : dict
+            ESS and entropy statistics over time (only returned when
+            ``return_ess=True``).
         """
         if params is None:
             params = {}

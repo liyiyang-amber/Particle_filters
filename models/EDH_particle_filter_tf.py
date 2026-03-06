@@ -1,7 +1,21 @@
 """
 TensorFlow implementation of EKF/UKF-assisted EDH Particle-Flow PF.
 
-This version uses TensorFlow for compatibility with entropy-regularized OT resampling.
+Provides a TF-native EDH particle flow filter compatible with
+entropy-regularised OT resampling (``DPF_OT_resampling``).
+
+Classes
+-------
+GaussianTracker (Protocol) – Interface for auxiliary EKF/UKF components.
+EDHConfig                   – Filter hyper-parameters.
+PFState                     – Output state container.
+EDHFlowPF_TF                – Main EDH flow filter (``tf.Module`` subclass).
+
+Functions
+---------
+rk4_step              – One fourth-order Runge-Kutta step.
+systematic_resample_tf – TF systematic resampling.
+effective_sample_size  – ESS from normalised weights.
 """
 
 from __future__ import annotations
@@ -16,13 +30,48 @@ from DPF_OT_resampling import sinkhorn_ot_resample
 # Protocols 
 
 class GaussianTracker(Protocol):
-    """Auxiliary EKF/UKF that supplies (m, P) and carries them forward."""
+    """Protocol for auxiliary EKF/UKF trackers used by the EDH flow filter.
+
+    Any object that implements the three methods below (with matching
+    signatures) satisfies this protocol.
+    """
+
     def predict(self) -> Tuple[np.ndarray, np.ndarray]:
-        """Return (m_{k|k-1}, P_{k|k-1}) for current step and update internal clock."""
+        """Perform the prediction step and advance the internal clock.
+
+        Returns
+        -------
+        m_pred : ndarray, shape (nx,)
+            Predicted state mean ``m_{k|k-1}``.
+        P_pred : ndarray, shape (nx, nx)
+            Predicted state covariance ``P_{k|k-1}``.
+        """
+
     def update(self, z_k: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """Measurement update; return (m_{k|k}, P_{k|k})."""
+        """Perform the measurement-update step.
+
+        Parameters
+        ----------
+        z_k : ndarray, shape (nz,)
+            Current observation.
+
+        Returns
+        -------
+        m_post : ndarray, shape (nx,)
+            Posterior state mean ``m_{k|k}``.
+        P_post : ndarray, shape (nx, nx)
+            Posterior state covariance ``P_{k|k}``.
+        """
+
     def get_past_mean(self) -> np.ndarray:
-        """Return \hat{x}_{k-1|k-1} (used to form \bar\eta_0 = g_k(\hat{x}_{k-1}, 0))."""
+        """Return the filtered mean from the previous time step.
+
+        Returns
+        -------
+        ndarray, shape (nx,)
+            Mean ``m_{k-1|k-1}`` (used to seed the mean flow trajectory
+            ``η̄_0 = g_k(m_{k-1|k-1}, 0)``).
+        """
 
 GFn = Callable[[tf.Tensor, Optional[tf.Tensor], Optional[tf.Tensor]], tf.Tensor]
 HFn = Callable[[tf.Tensor], tf.Tensor]
@@ -32,7 +81,22 @@ LogLikePdf  = Callable[[tf.Tensor, tf.Tensor], tf.Tensor]
 
 # Utils
 def rk4_step(x: tf.Tensor, f: Callable[[tf.Tensor], tf.Tensor], dt: float) -> tf.Tensor:
-    """One RK4 step for x' = f(x)."""
+    """Integrate ``x' = f(x)`` by one step using fourth-order Runge-Kutta.
+
+    Parameters
+    ----------
+    x : tf.Tensor, shape (n,)
+        Current state vector.
+    f : callable
+        Right-hand-side function ``x -> dx/dt``.
+    dt : float
+        Step size.
+
+    Returns
+    -------
+    tf.Tensor, shape (n,)
+        State after one RK4 step.
+    """
     k1 = f(x)
     k2 = f(x + 0.5 * dt * k1)
     k3 = f(x + 0.5 * dt * k2)
@@ -40,7 +104,20 @@ def rk4_step(x: tf.Tensor, f: Callable[[tf.Tensor], tf.Tensor], dt: float) -> tf
     return x + (dt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
 
 def systematic_resample_tf(weights: tf.Tensor, seed: Optional[int] = None) -> tf.Tensor:
-    """Systematic resampling in TensorFlow; returns ancestor indices."""
+    """Systematic resampling in TensorFlow.
+
+    Parameters
+    ----------
+    weights : tf.Tensor, shape (N,)
+        Non-negative particle weights (need not be normalised).
+    seed : int, optional
+        Random seed for the single uniform draw.  Default is ``None``.
+
+    Returns
+    -------
+    tf.Tensor, shape (N,), dtype int32
+        Integer ancestor indices in ``[0, N-1]``.
+    """
     n = tf.shape(weights)[0]
     n_float = tf.cast(n, tf.float32)
     w = weights / tf.reduce_sum(weights)
@@ -61,7 +138,18 @@ def systematic_resample_tf(weights: tf.Tensor, seed: Optional[int] = None) -> tf
     return idx
 
 def effective_sample_size(weights: tf.Tensor) -> tf.Tensor:
-    """ESS = 1 / sum_i w_i^2 (with normalized weights)."""
+    """Compute the Effective Sample Size (ESS).
+
+    Parameters
+    ----------
+    weights : tf.Tensor, shape (N,)
+        Non-negative particle weights (normalised internally).
+
+    Returns
+    -------
+    tf.Tensor
+        Scalar ESS = ``1 / Σ_i w̃_i²`` where ``w̃`` are normalised weights.
+    """
     w = weights / tf.reduce_sum(weights)
     return 1.0 / tf.reduce_sum(w * w)
 
@@ -69,7 +157,30 @@ def effective_sample_size(weights: tf.Tensor) -> tf.Tensor:
 
 @dataclass
 class EDHConfig:
-    """Configuration for EKF/UKF-assisted EDH-PF."""
+    """Configuration hyper-parameters for the TF EDH Particle-Flow PF.
+
+    Attributes
+    ----------
+    n_particles : int
+        Number of particles.  Default is ``512``.
+    n_lambda_steps : int
+        Number of pseudo-time steps per observation.  Default is ``8``.
+    resample_ess_ratio : float
+        Resample when ``ESS < ratio * N``.  Set to ``0`` to disable.
+        Default is ``0.5``.
+    flow_integrator : str
+        Integration scheme for the flow ODE.  ``'rk4'`` (default) or
+        ``'euler'``.
+    use_ot_resampling : bool
+        Use Sinkhorn-OT resampling instead of systematic.  Default is
+        ``False``.
+    ot_epsilon : float
+        Entropic regularisation for OT resampling.  Default is ``0.1``.
+    ot_sinkhorn_iters : int
+        Number of Sinkhorn iterations.  Default is ``50``.
+    random_seed : int, optional
+        Random seed.  Default is ``None``.
+    """
     n_particles: int = 512
     n_lambda_steps: int = 8
     resample_ess_ratio: float = 0.5
@@ -81,7 +192,22 @@ class EDHConfig:
 
 @dataclass
 class PFState:
-    """Particle filter state container."""
+    """Particle filter state container.
+
+    Attributes
+    ----------
+    particles : tf.Tensor, shape (N, nx)
+        Particle ensemble.
+    weights : tf.Tensor, shape (N,)
+        Normalised particle weights.
+    mean : tf.Tensor, shape (nx,)
+        Weighted ensemble mean.
+    cov : tf.Tensor, shape (nx, nx)
+        Weighted ensemble covariance.
+    diagnostics : dict, optional
+        Diagnostic information from the last step (ESS, condition numbers,
+        etc.).
+    """
     particles: tf.Tensor  # (N, nx)
     weights: tf.Tensor    # (N,)
     mean: tf.Tensor       # (nx,)
@@ -91,7 +217,12 @@ class PFState:
 # EDH Flow PF 
 
 class EDHFlowPF_TF(tf.Module):
-    """TensorFlow implementation of EKF/UKF-assisted EDH particle-flow PF."""
+    """TensorFlow EDH Particle-Flow Filter assisted by an EKF or UKF.
+
+    Moves particles from the prior to an approximate posterior by integrating
+    a linearisation-based flow in pseudo-time λ ∈ [0, 1].  A ``GaussianTracker``
+    (EKF or UKF) provides the linearisation trajectory.
+    """
 
     def __init__(
         self,
@@ -105,21 +236,31 @@ class EDHFlowPF_TF(tf.Module):
         config: Optional[EDHConfig] = None,
         name: str = "EDHFlowPF_TF",
     ) -> None:
-        """
+        """Initialise the EDH Particle-Flow Filter.
+
         Parameters
         ----------
         tracker : GaussianTracker
-            EKF/UKF that provides (m_{k|k-1}, P) and updates to (m_{k|k}, P_k).
-        g, h, jacobian_h : callables
-            Process/observation models and Jacobian of h (TensorFlow functions).
-        log_trans_pdf, log_like_pdf : callables
-            Log transition and log likelihood densities (TensorFlow functions).
-        R : ndarray
-            Observation noise covariance (nz, nz) used in the flow.
-        config : Optional[EDHConfig]
-            Filter configuration.
-        name : str
-            Module name.
+            EKF or UKF that provides the linearisation trajectory
+            ``(m_{k|k-1}, P_{k|k-1})`` and advances to ``(m_{k|k}, P_{k|k})``.
+        g : callable
+            Vectorised process function ``(x, u, v) -> x_next``
+            (``tf.Tensor`` inputs).
+        h : callable
+            Observation function ``x -> z`` (``tf.Tensor``).
+        jacobian_h : callable
+            Jacobian of ``h`` at a single state ``x -> J`` with shape
+            ``(nz, nx)``.
+        log_trans_pdf : callable
+            Log transition density ``(x_new, x_old) -> scalar``.
+        log_like_pdf : callable
+            Log likelihood ``(z, x) -> scalar``.
+        R : ndarray, shape (nz, nz)
+            Measurement-noise covariance used in the EDH flow matrices.
+        config : EDHConfig, optional
+            Filter hyper-parameters.  Defaults to ``EDHConfig()``.
+        name : str, optional
+            TensorFlow module name.  Default is ``'EDHFlowPF_TF'``.
         """
         super().__init__(name=name)
         self.tracker = tracker
@@ -133,7 +274,20 @@ class EDHFlowPF_TF(tf.Module):
 
 
     def init_from_gaussian(self, mean0: np.ndarray, cov0: np.ndarray) -> PFState:
-        """Sample initial particles from N(mean0, cov0) with equal weights."""
+        """Initialise particles by sampling from N(mean0, cov0).
+
+        Parameters
+        ----------
+        mean0 : ndarray, shape (nx,)
+            Prior mean.
+        cov0 : ndarray, shape (nx, nx)
+            Prior covariance.
+
+        Returns
+        -------
+        PFState
+            Initial state with uniform weights and ``t = 0``.
+        """
         n, nx = self.cfg.n_particles, mean0.size
         
         # Sample particles
@@ -154,16 +308,35 @@ class EDHFlowPF_TF(tf.Module):
         u_km1: Optional[np.ndarray] = None,
         process_noise_sampler: Optional[Callable[[int, int], tf.Tensor]] = None,
     ) -> PFState:
-        """
-        Run one EDH-PF step.
-        
-        Steps:
-        1. EKF/UKF prediction: (\hat{x}_{k-1|k-1}, P_{k-1|k-1}) -> (m_{k|k-1}, P_{k|k-1})
-        2. Propagate particles: \eta_0^i = g(x_{k-1}^i, v)
-        3. Flow update in pseudo-time \lambda \in [0,1]
-        4. Weight update: w \propto w_{k-1} \cdot p(x_k|x_{k-1}) \cdot p(z_k|x_k) / p(\eta_0|x_{k-1})
-        5. EKF/UKF measurement update: (m_{k|k-1}, P_{k|k-1}) -> (m_{k|k}, P_{k|k})
-        6. Optional resampling (systematic or OT)
+        """Run one EDH-PF step.
+
+        Executes the following stages:
+
+        1. **EKF/UKF predict** — ``(m_{k-1|k-1}, P_{k-1|k-1}) → (m_{k|k-1}, P_{k|k-1})``.
+        2. **Propagate particles** — ``η₀ⁱ = g(x_{k-1}ⁱ, u, v)``.
+        3. **Flow update** — integrate the EDH velocity field in pseudo-time
+           λ ∈ [0, 1] with the configured integrator.
+        4. **Weight update** — importance weights via transition, likelihood,
+           and proposal densities.
+        5. **EKF/UKF update** — ``(m_{k|k-1}, P_{k|k-1}) → (m_{k|k}, P_{k|k})``.
+        6. **Optional resampling** — systematic or OT when ESS is low.
+
+        Parameters
+        ----------
+        state : PFState
+            Filter state from the previous time step.
+        z_k : ndarray, shape (nz,)
+            Current observation.
+        u_km1 : ndarray, optional
+            Control input at time ``k-1``.  Default is ``None``.
+        process_noise_sampler : callable, optional
+            Function ``(N, nx) -> tf.Tensor`` that returns process noise
+            samples.  If ``None``, zero noise is used.
+
+        Returns
+        -------
+        PFState
+            Updated filter state for time step ``k``.
         """
         N = tf.shape(state.particles)[0]
         nx = tf.shape(state.particles)[1]
@@ -322,7 +495,22 @@ class EDHFlowPF_TF(tf.Module):
     
     @staticmethod
     def _weighted_stats(x: tf.Tensor, w: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor]:
-        """Compute weighted mean and covariance."""
+        """Compute weighted mean and covariance.
+
+        Parameters
+        ----------
+        x : tf.Tensor, shape (N, nx)
+            Particle ensemble.
+        w : tf.Tensor, shape (N,)
+            Non-negative weights (normalised internally).
+
+        Returns
+        -------
+        mean : tf.Tensor, shape (nx,)
+            Weighted mean.
+        cov : tf.Tensor, shape (nx, nx)
+            Weighted sample covariance (symmetrised).
+        """
         w = w / tf.reduce_sum(w)
         mean = tf.reduce_sum(x * w[:, None], axis=0)
         xc = x - mean[None, :]

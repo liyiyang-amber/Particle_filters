@@ -4,19 +4,27 @@ from models.kalman_filter import kalman_filter_general
 
 @pytest.mark.integration
 def test_kf_against_simulated_lgssm(tmp_path):
-    # Load your saved sim; adapt path if needed
-    data = np.load("simulator/data/lgssm_simul_data.npz")
-    X = data["X"]; Y = data["Y"]
+    rng = np.random.default_rng(123)
+    T = 400
 
-    # system matrices (use the ones from the data file to ensure consistency)
-    A = data["A"]
-    B = data["B"]
-    C = data["C"]
-    D = data["D"]
+    # Stable 2-D LGSSM with moderate process / observation noise.
+    A = np.array([[0.85, 0.10], [0.0, 0.75]])
+    C = np.array([[1.0, 0.0], [0.0, 1.0]])
+    B = np.array([[0.20, 0.00], [0.00, 0.15]])
+    D = np.array([[0.10, 0.00], [0.00, 0.12]])
     Sigma = np.eye(2)
     Q = B @ B.T
     R = D @ D.T
     Gamma = np.eye(2)
+
+    X = np.zeros((T, 2))
+    Y = np.zeros((T, 2))
+    x = rng.multivariate_normal(np.zeros(2), Sigma)
+    for t in range(T):
+        x = A @ x + B @ rng.standard_normal(2)
+        y = C @ x + D @ rng.standard_normal(2)
+        X[t] = x
+        Y[t] = y
 
     res = kalman_filter_general(Y=Y, Phi=A, H=C, Gamma=Gamma, Q=Q, R=R,
                                 x0=np.zeros(2), P0=Sigma, use_joseph=False)

@@ -6,6 +6,12 @@ import numpy as np
 import pytest
 import tensorflow as tf
 
+tfp = pytest.importorskip(
+    "tensorflow_probability",
+    exc_type=ImportError,
+    reason="TensorFlow Probability is unavailable or incompatible with the installed TensorFlow version.",
+)
+
 import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))

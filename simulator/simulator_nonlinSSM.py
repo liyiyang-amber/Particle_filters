@@ -15,6 +15,11 @@ class NonlinearSSMSimulationResult:
         X_n = X_{n-1}/2 + 25*X_{n-1}/(1 + X_{n-1}^2) + 8*cos(1.2*n) + V_n
         Y_n = X_n^2 / 20 + W_n
     where V_n ~ N(0, σ_V^2) and W_n ~ N(0, σ_W^2).
+
+    Notes
+    -----
+    Assumes ``X`` and ``Y`` are one-dimensional, time-ordered arrays from a
+    single simulation run.
     """
     X: NDArray[np.float64]
     """Array of shape (N,) containing latent states x_1, ..., x_N."""
@@ -31,8 +36,7 @@ class NonlinearSSMSimulationResult:
         format: str = "npz",
         overwrite: bool = False,
     ) -> None:
-        """
-        Save the simulated data to a file.
+        """Save the simulated data to a file.
 
         Parameters
         ----------
@@ -43,10 +47,21 @@ class NonlinearSSMSimulationResult:
         overwrite : bool, default=False
             If False, raises an error when the file already exists.
 
+        Returns
+        -------
+        None
+            Writes the simulation arrays and scalar parameters to disk.
+
         Raises
         ------
         FileExistsError
             If overwrite is False and the target file already exists.
+
+        Notes
+        -----
+        Assumes the destination directory already exists. The ``format``
+        parameter is accepted for API consistency although only ``npz`` output
+        is currently implemented.
         """
         target = path if path.endswith(".npz") else f"{path}.npz"
         if os.path.exists(target) and not overwrite:
@@ -69,8 +84,7 @@ def simulate_nonlinear_ssm(
     x0: Optional[float] = None,
     burn_in: int = 0,
 ) -> NonlinearSSMSimulationResult:
-    """
-    Simulate data from a non-linear Gaussian state-space model.
+    """Simulate data from a non-linear Gaussian state-space model.
 
     The model is defined as:
         X_1 ~ N(0, 5)  (if x0 is None)
@@ -102,15 +116,8 @@ def simulate_nonlinear_ssm(
     Returns
     -------
     NonlinearSSMSimulationResult
-        Dataclass with fields:
-            - X : ndarray of shape (N,)
-                Simulated latent states x_1, ..., x_N.
-            - Y : ndarray of shape (N,)
-                Simulated observations y_1, ..., y_N.
-            - sigma_v : float
-                Process noise standard deviation.
-            - sigma_w : float
-                Measurement noise standard deviation.
+        Dataclass containing the latent trajectory, observations, and the
+        scalar noise parameters used for simulation.
 
     Notes
     -----
@@ -124,6 +131,11 @@ def simulate_nonlinear_ssm(
     The model equations are:
         X_n = X_{n-1}/2 + 25*X_{n-1}/(1 + X_{n-1}^2) + 8*cos(1.2*n) + V_n  ... (14)
         Y_n = X_n^2 / 20 + W_n                                               ... (15)
+
+    Notes
+    -----
+    Assumes ``sigma_v`` and ``sigma_w`` are positive finite scalars. The
+    returned arrays exclude discarded burn-in samples and are ordered by time.
     """
     if N <= 0:
         raise ValueError("N must be positive.")

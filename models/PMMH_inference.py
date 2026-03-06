@@ -10,39 +10,52 @@ import time
 
 @dataclass
 class PMMHConfig:
-    """Configuration for PMMH sampler."""
+    """Configuration parameters for :class:`PMMHSampler`.
+
+    Attributes
+    ----------
+    n_samples : int
+        Number of posterior samples to retain after burn-in. Default ``1000``.
+    n_burnin : int
+        Number of burn-in iterations to discard. Default ``500``.
+    proposal_std : ndarray or None
+        Per-parameter proposal standard deviations for the Gaussian random
+        walk.  If ``None``, values are initialised from ``initial_params``.
+    adapt_proposal : bool
+        If ``True``, adapt proposal scales during burn-in. Default ``True``.
+    adapt_interval : int
+        Number of iterations between proposal-scale adaptations.
+        Default ``50``.
+    target_accept_rate : float
+        Target acceptance rate for adaptive scaling. Default ``0.234``.
+    verbose : bool
+        If ``True``, print progress and summary information. Default ``True``.
+    print_interval : int
+        Number of iterations between progress prints. Default ``100``.
+    """
     n_samples: int = 1000
-    """Number of samples to draw (after burnin)"""
     
     n_burnin: int = 500
-    """Number of burnin samples to discard"""
     
     proposal_std: np.ndarray = None
-    """Standard deviation for Gaussian random walk proposal (array for each parameter)"""
     
     adapt_proposal: bool = True
-    """Whether to adapt proposal during burnin"""
     
     adapt_interval: int = 50
-    """Number of iterations between proposal adaptations"""
     
     target_accept_rate: float = 0.234
-    """Target acceptance rate for proposal adaptation (optimal for Gaussian targets)"""
     
     verbose: bool = True
-    """Whether to print progress"""
     
     print_interval: int = 100
-    """Number of iterations between progress prints"""
 
 
 class PMMHSampler:
-    """
-    Particle Marginal Metropolis-Hastings sampler for parameter inference.
-    
-    PMMH uses a particle filter to estimate the likelihood p(Y_{1:T} | θ),
-    which is then used in a Metropolis-Hastings algorithm to sample from
-    the posterior p(θ | Y_{1:T}).
+    """Particle Marginal Metropolis-Hastings sampler for parameter inference.
+
+    PMMH uses an unbiased particle-filter estimate of the marginal
+    likelihood :math:`p(Y_{1:T} \mid \theta)` inside a Metropolis-Hastings
+    sampler to target the posterior :math:`p(\theta \mid Y_{1:T})`.
     """
     
     def __init__(
@@ -78,14 +91,11 @@ class PMMHSampler:
         Returns
         -------
         results : dict
-            Dictionary containing:
-                - samples: ndarray of shape (n_samples, n_params)
-                - log_likelihood_trace: ndarray of shape (n_samples + n_burnin,)
-                - log_prior_trace: ndarray of shape (n_samples + n_burnin,)
-                - accept_trace: ndarray of shape (n_samples + n_burnin,)
-                - accept_rate: float
-                - runtime: float
-                - proposal_std: ndarray, final proposal standard deviation
+            Dictionary containing posterior samples, full traces, acceptance
+            statistics, runtime, and the final proposal scale.  Keys are
+            ``samples``, ``samples_full``, ``log_likelihood_trace``,
+            ``log_prior_trace``, ``accept_trace``, ``accept_rate``,
+            ``accept_rate_post_burnin``, ``runtime``, and ``proposal_std``.
         """
         config = self.config
         n_total = config.n_samples + config.n_burnin
@@ -263,7 +273,7 @@ def compute_ess(samples: np.ndarray, max_lag: Optional[int] = None) -> float:
                 break
             tau += 2 * acf[lag]
         
-        # ESS
+    # ESS = N / tau
         ess = n_samples / tau
         ess_per_param.append(ess)
     
@@ -276,15 +286,15 @@ def compute_ess_per_second(samples: np.ndarray, runtime: float) -> float:
     
     Parameters
     ----------
-    samples : ndarray, shape (n_samples, n_params)
-        MCMC samples
+    samples : ndarray, shape (n_samples,) or (n_samples, n_params)
+        MCMC samples.
     runtime : float
-        Total runtime in seconds
+        Total runtime in seconds.
         
     Returns
     -------
     ess_per_sec : float
-        Effective samples per second
+        Effective samples per second.
     """
     ess = compute_ess(samples)
     return ess / runtime

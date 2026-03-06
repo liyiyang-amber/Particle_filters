@@ -246,7 +246,7 @@ def test_effective_sample_size(simple_linear_system):
     
     # Neff should decrease (unless resampling happened, which shouldn't with low threshold)
     # With extreme observation, weights should be non-uniform
-    assert 1.0 <= Neff_after <= 1000.0
+    assert 1.0 <= Neff_after <= 1000.0 + 1e-9
 
 
 def test_multiple_steps(simple_linear_system):

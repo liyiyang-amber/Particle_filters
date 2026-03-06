@@ -12,32 +12,61 @@ import time
 
 @dataclass
 class HMCConfig:
-    """Configuration for HMC sampler."""
+    """Configuration parameters for :class:`HMCSampler`.
+
+    Attributes
+    ----------
+    n_samples : int
+        Number of posterior samples to retain after burn-in. Default ``1000``.
+    n_burnin : int
+        Number of warm-up iterations to discard. Default ``500``.
+    step_size : float
+        Initial leapfrog step size. Default ``0.01``.
+    n_leapfrog_steps : int
+        Number of leapfrog steps per HMC transition. Default ``10``.
+    adapt_step_size : bool
+        If ``True``, adapt the step size during burn-in using TFP's
+        simple step-size adaptation. Default ``True``.
+    target_accept_prob : float
+        Target acceptance probability used by adaptive step-size tuning.
+        Default ``0.65``.
+    verbose : bool
+        If ``True``, print progress and summary information. Default ``True``.
+    """
     n_samples: int = 1000
-    """Number of samples to draw (after burnin)"""
     
     n_burnin: int = 500
-    """Number of burnin samples to discard"""
     
     step_size: float = 0.01
-    """HMC step size (epsilon)"""
     
     n_leapfrog_steps: int = 10
-    """Number of leapfrog steps per HMC iteration"""
     
     adapt_step_size: bool = True
-    """Whether to adapt step size during burnin"""
     
     target_accept_prob: float = 0.65
-    """Target acceptance probability for step size adaptation"""
     
     verbose: bool = True
-    """Whether to print progress"""
 
 
 class HMCSampler:
-    """
-    Hamiltonian Monte Carlo sampler for parameter inference.
+    """Hamiltonian Monte Carlo sampler for parameter inference.
+
+    Wraps TensorFlow Probability's HMC kernel to sample from a differentiable
+    log-posterior defined in TensorFlow.
+
+    Parameters
+    ----------
+    log_posterior_fn : callable
+        Callable mapping a TensorFlow parameter tensor to a scalar log
+        posterior value.
+    config : HMCConfig, optional
+        Sampler configuration. If omitted, default :class:`HMCConfig`
+        settings are used.
+
+    Notes
+    -----
+    Assumes ``log_posterior_fn`` is differentiable with respect to its input
+    and operates in the same parameter space as the supplied initial state.
     """
     
     def __init__(
@@ -45,7 +74,8 @@ class HMCSampler:
         log_posterior_fn: Callable[[tf.Tensor], tf.Tensor],
         config: Optional[HMCConfig] = None,
     ):
-        """
+        """Construct an HMC sampler.
+
         Parameters
         ----------
         log_posterior_fn : callable
@@ -53,13 +83,22 @@ class HMCSampler:
             Must be differentiable (e.g., using tf.function and tf.GradientTape).
         config : HMCConfig, optional
             Configuration for the sampler.
+
+        Returns
+        -------
+        None
+            Stores the sampling callable and sampler configuration.
+
+        Notes
+        -----
+        Assumes the callable is compatible with TensorFlow Probability MCMC
+        kernels and returns a scalar log density.
         """
         self.log_posterior_fn = log_posterior_fn
         self.config = config or HMCConfig()
         
     def run(self, initial_params: np.ndarray) -> Dict:
-        """
-        Run HMC sampler using TensorFlow Probability.
+        """Run HMC sampling using TensorFlow Probability.
         
         Parameters
         ----------
@@ -69,11 +108,14 @@ class HMCSampler:
         Returns
         -------
         results : dict
-            Dictionary containing:
-                - samples: ndarray of shape (n_samples, n_params)
-                - is_accepted: ndarray of shape (n_samples,)
-                - accept_rate: float
-                - runtime: float
+            Dictionary containing posterior samples, acceptance indicators,
+            acceptance rate, and run time.  Keys are ``samples``,
+            ``is_accepted``, ``accept_rate``, and ``runtime``.
+
+        Notes
+        -----
+        Assumes ``initial_params`` has the shape and parameterisation expected
+        by ``log_posterior_fn``. Returned samples remain in that same space.
         """
         config = self.config
         
@@ -152,20 +194,24 @@ class HMCSampler:
 
 
 def compute_ess(samples: np.ndarray, max_lag: Optional[int] = None) -> float:
-    """
-    Compute effective sample size (ESS) using the initial positive sequence method.
+    """Compute effective sample size using the initial positive sequence method.
     
     Parameters
     ----------
-    samples : ndarray, shape (n_samples, n_params)
-        MCMC samples
+    samples : ndarray, shape (n_samples,) or (n_samples, n_params)
+        MCMC samples.
     max_lag : int, optional
-        Maximum lag for autocorrelation computation
+        Maximum lag for autocorrelation computation.
         
     Returns
     -------
     ess : float
-        Effective sample size (averaged over parameters)
+        Effective sample size averaged over parameter dimensions.
+
+    Notes
+    -----
+    Assumes samples are ordered draws from a stationary Markov chain. For
+    vector-valued samples, ESS is computed per parameter and averaged.
     """
     if samples.ndim == 1:
         samples = samples.reshape(-1, 1)
@@ -203,20 +249,24 @@ def compute_ess(samples: np.ndarray, max_lag: Optional[int] = None) -> float:
 
 
 def compute_ess_per_second(samples: np.ndarray, runtime: float) -> float:
-    """
-    Compute effective sample size per second.
+    """Compute effective sample size per second.
     
     Parameters
     ----------
-    samples : ndarray, shape (n_samples, n_params)
-        MCMC samples
+    samples : ndarray, shape (n_samples,) or (n_samples, n_params)
+        MCMC samples.
     runtime : float
-        Total runtime in seconds
+        Total runtime in seconds.
         
     Returns
     -------
     ess_per_sec : float
-        Effective samples per second
+        Effective samples per second.
+
+    Notes
+    -----
+    Assumes ``runtime`` is positive and measured in seconds for the chain
+    represented by ``samples``.
     """
     ess = compute_ess(samples)
     return ess / runtime

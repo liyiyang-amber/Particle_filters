@@ -1,9 +1,26 @@
 """
 Extended Kalman Filter (EKF).
 
-This module implements a generic Extended Kalman Filter with pluggable motion
-and measurement models, their Jacobians, and optional numerical Jacobian
-fallbacks. 
+Implements a generic EKF with pluggable nonlinear process and measurement
+models, optional analytic Jacobians, and a numerical Jacobian fallback.
+
+The additive-noise SSM is::
+
+    x_k  = g(x_{k-1}, u_{k-1}) + w_{k-1},   w ~ N(0, Q)
+    z_k  = h(x_k)               + v_k,       v ~ N(0, R)
+
+The EKF linearises g and h around the current posterior estimate to
+propagate a Gaussian approximation.
+
+Classes
+-------
+EKFState           – Gaussian posterior container.
+ExtendedKalmanFilter – EKF implementing :class:`~base_ssm.BaseFilter`.
+
+Shared utilities from :mod:`base_ssm`
+--------------------------------------
+:func:`~base_ssm.numerical_jacobian` replaces the private finite-difference
+helpers ``numerical_jacobian_g`` and ``numerical_jacobian_h``.
 """
 
 from __future__ import annotations
@@ -12,6 +29,23 @@ from dataclasses import dataclass
 from typing import Callable, Optional, Tuple
 
 import numpy as np
+
+try:
+    from models.base_ssm import (
+        BaseFilter,
+        BaseFilterState,
+        GaussianFilterState,
+        numerical_jacobian as _num_jac,
+        symmetrise,
+    )
+except ModuleNotFoundError:
+    from base_ssm import (
+        BaseFilter,
+        BaseFilterState,
+        GaussianFilterState,
+        numerical_jacobian as _num_jac,
+        symmetrise,
+    )
 
 
 Array = np.ndarray
@@ -22,22 +56,26 @@ HFn = Callable[[Array], Array]
 
 
 @dataclass
-class EKFState:
-    """Container for EKF posterior state.
+class EKFState(GaussianFilterState):
+    """Gaussian posterior state for the EKF.
+
+    Extends :class:`~base_ssm.GaussianFilterState` without adding new fields;
+    the separate name keeps call-sites readable and allows isinstance checks.
 
     Parameters
     ----------
-    mean : np.ndarray
-        Posterior state mean (shape: (nx,)).
-    cov : np.ndarray
-        Posterior state covariance (shape: (nx, nx)).
+    mean : ndarray, shape (nx,)
+        Posterior state mean.
+    cov : ndarray, shape (nx, nx)
+        Posterior state covariance.
     t : int
         Discrete time index of this posterior.
-    """
 
-    mean: Array
-    cov: Array
-    t: int
+    Notes
+    -----
+    Assumes ``cov`` represents the Gaussian uncertainty associated with
+    ``mean`` at time ``t``.
+    """
 
 
 def numerical_jacobian_g(
@@ -46,33 +84,33 @@ def numerical_jacobian_g(
     u: Optional[Array],
     eps: float = 1e-6,
 ) -> Array:
-    """Compute a finite-difference Jacobian of the motion model w.r.t. x.
+    """Finite-difference Jacobian of the process model g w.r.t. x.
+
+    Delegates to :func:`base_ssm.numerical_jacobian`; kept as a named
+    convenience wrapper for backward compatibility.
 
     Parameters
     ----------
     g : callable
-        Motion function g(x, u).
-    x : ndarray
-        Expansion point (nx,).
-    u : ndarray, optional
-        Control input or None.
+        Process function g(x, u) → (nx,).
+    x : ndarray, shape (nx,)
+        Expansion point.
+    u : ndarray or None
+        Control input, forwarded as a positional argument to ``g``.
     eps : float, optional
-        Finite-difference step. Default is 1e-6.
+        Finite-difference step size. Default is 1e-6.
 
     Returns
     -------
-    ndarray
-        (nx, nx) Jacobian matrix.
+    ndarray, shape (nx, nx)
+        Jacobian ∂g/∂x evaluated at (x, u).
+
+    Notes
+    -----
+    Assumes ``g`` returns a fixed-length state vector and is locally smooth
+    around ``x``.
     """
-    x = np.asarray(x, dtype=float)
-    y0 = np.asarray(g(x, u), dtype=float)
-    nx = x.size
-    J = np.zeros((y0.size, nx), dtype=float)
-    for j in range(nx):
-        dx = np.zeros(nx, dtype=float)
-        dx[j] = eps
-        J[:, j] = (g(x + dx, u) - y0) / eps
-    return J
+    return _num_jac(lambda xp: g(xp, u), x, eps=eps)
 
 
 def numerical_jacobian_h(
@@ -80,57 +118,76 @@ def numerical_jacobian_h(
     x: Array,
     eps: float = 1e-6,
 ) -> Array:
-    """Compute a finite-difference Jacobian of the measurement model w.r.t. x.
+    """Finite-difference Jacobian of the observation model h w.r.t. x.
+
+    Delegates to :func:`base_ssm.numerical_jacobian`; kept as a named
+    convenience wrapper for backward compatibility.
 
     Parameters
     ----------
     h : callable
-        Measurement function h(x).
-    x : ndarray
-        Expansion point (nx,).
+        Observation function h(x) → (nz,).
+    x : ndarray, shape (nx,)
+        Expansion point.
     eps : float, optional
-        Finite-difference step. Default is 1e-6.
+        Finite-difference step size. Default is 1e-6.
 
     Returns
     -------
-    ndarray
-        (nz, nx) Jacobian matrix.
+    ndarray, shape (nz, nx)
+        Jacobian ∂h/∂x evaluated at x.
+
+    Notes
+    -----
+    Assumes ``h`` returns a fixed-length observation vector and is locally
+    smooth around ``x``.
     """
-    x = np.asarray(x, dtype=float)
-    z0 = np.asarray(h(x), dtype=float)
-    nx = x.size
-    J = np.zeros((z0.size, nx), dtype=float)
-    for j in range(nx):
-        dx = np.zeros(nx, dtype=float)
-        dx[j] = eps
-        J[:, j] = (h(x + dx) - z0) / eps
-    return J
+    return _num_jac(h, x, eps=eps)
 
 
-class ExtendedKalmanFilter:
+class ExtendedKalmanFilter(BaseFilter):
     """Extended Kalman Filter with additive Gaussian noises.
 
-    The process and measurement models are:
-        x_k   = g(x_{k-1}, u_{k-1}) + w_{k-1},   w_{k-1} ~ N(0, Q)
-        z_k   = h(x_k)                + v_k,     v_k     ~ N(0, R)
+    Derives from :class:`~base_ssm.BaseFilter`, providing a consistent
+    ``initialize`` / ``predict`` / ``update`` / ``step`` / ``run`` interface.
 
-    where g and h can be nonlinear. The Jacobians are:
-        G_k = ∂g/∂x evaluated at (x_{k-1|k-1}, u_{k-1})
-        H_k = ∂h/∂x evaluated at x_{k|k-1}
+    The additive-noise SSM is::
+
+        x_k  = g(x_{k-1}, u_{k-1}) + w_{k-1},   w ~ N(0, Q)
+        z_k  = h(x_k)               + v_k,       v ~ N(0, R)
+
+    The EKF linearises g and h at the current estimate:
+
+    - G_k = ∂g/∂x  evaluated at (x_{k-1|k-1}, u_{k-1})
+    - H_k = ∂h/∂x  evaluated at x_{k|k-1}
 
     Parameters
     ----------
-        g: Motion function g(x, u) → (nx,).
-        h: Measurement function h(x) → (nz,).
-        Q: Process noise covariance (nx, nx).
-        R: Measurement noise covariance (nz, nz).
-        jac_g: Optional analytic Jacobian function for g. If None, uses
-            finite-difference numerical Jacobian.
-        jac_h: Optional analytic Jacobian function for h. If None, uses
-            finite-difference numerical Jacobian.
-        joseph: If True, use Joseph-stabilized covariance update.
-        jitter: Small positive value added to innovation covariance diagonal
-            for numerical stability.
+    g : callable
+        Process (motion) function g(x, u) → (nx,).
+    h : callable
+        Observation function h(x) → (nz,).
+    Q : ndarray, shape (nx, nx)
+        Process-noise covariance.
+    R : ndarray, shape (nz, nz)
+        Measurement-noise covariance.
+    jac_g : callable, optional
+        Analytic Jacobian jac_g(x, u) → (nx, nx).  If ``None``, a
+        finite-difference approximation is used.
+    jac_h : callable, optional
+        Analytic Jacobian jac_h(x) → (nz, nx).  If ``None``, a
+        finite-difference approximation is used.
+    joseph : bool, optional
+        If ``True``, use the numerically stable Joseph-form covariance
+        update P = (I - K H) P (I - K H)^T + K R K^T.  Default is ``False``.
+    jitter : float, optional
+        Small positive value added to the innovation covariance diagonal
+        for numerical stability.  Default is 0.0.
+
+    Notes
+    -----
+    Assumes additive Gaussian process and observation noise and that the
+    supplied callables preserve fixed state and observation dimensions.
     """
 
     def __init__(
@@ -155,25 +212,61 @@ class ExtendedKalmanFilter:
         self.jitter = float(jitter)
 
         nx = self.Q.shape[0]
-        assert self.Q.shape == (nx, nx), "Q must be square."
+        if self.Q.shape != (nx, nx):
+            raise ValueError("Q must be square (nx, nx).")
         nz = self.R.shape[0]
-        assert self.R.shape == (nz, nz), "R must be square."
+        if self.R.shape != (nz, nz):
+            raise ValueError("R must be square (nz, nz).")
+
+    # ------------------------------------------------------------------
+    # BaseFilter interface
+    # ------------------------------------------------------------------
+
+    def initialize(self, mean: Array, cov: Array) -> EKFState:
+        """Create an initial EKF state from a Gaussian prior N(mean, cov).
+
+        Parameters
+        ----------
+        mean : ndarray, shape (nx,)
+            Initial state mean.
+        cov : ndarray, shape (nx, nx)
+            Initial state covariance.
+
+        Returns
+        -------
+        EKFState
+            Initial filter state at time t=0.
+
+        Notes
+        -----
+        Assumes ``cov`` is square and compatible with ``mean``.
+        """
+        return EKFState(mean=np.asarray(mean, float), cov=np.asarray(cov, float), t=0)
 
     # ------------------------- core EKF ops -------------------------
 
     def predict(self, state: EKFState, u: Optional[Array] = None) -> EKFState:
-        """Run the EKF prediction step.
+        """Run the EKF prediction (time-update) step.
+
+        Propagates the Gaussian posterior through the linearised process model.
 
         Parameters
         ----------
-        state:
+        state : EKFState
             Previous posterior state (mean, cov, t).
-        u:
-            Optional control input u_{k-1}.
+        u : ndarray, optional
+            Control input u_{k-1}.  ``None`` if no input.
 
         Returns
         -------
-            Predicted state EKFState(mean= x_{k|k-1}, cov= P_{k|k-1}, t= state.t + 1).
+        EKFState
+            Predicted state with mean x_{k|k-1}, covariance P_{k|k-1},
+            and time index state.t + 1.
+
+        Notes
+        -----
+        Assumes the process Jacobian returned or approximated at ``state.mean``
+        has shape ``(nx, nx)``.
         """
         x = np.asarray(state.mean, dtype=float)
         P = np.asarray(state.cov, dtype=float)
@@ -194,16 +287,27 @@ class ExtendedKalmanFilter:
         return EKFState(mean=x_pred, cov=P_pred, t=state.t + 1)
 
     def update(self, pred: EKFState, z: Array) -> EKFState:
-        """Run the EKF measurement update.
+        """Run the EKF measurement-update step.
+
+        Corrects the predicted state with the linearised observation model.
 
         Parameters
         ----------
-            pred: Predicted state (from `predict`).
-            z: Observation vector z_k (shape: (nz,)).
+        pred : EKFState
+            Predicted state returned by :meth:`predict`.
+        z : ndarray, shape (nz,)
+            Observation vector z_k.
 
         Returns
         -------
-            Posterior state EKFState(mean= x_{k|k}, cov= P_{k|k}, t= pred.t).
+        EKFState
+            Posterior state with mean x_{k|k}, covariance P_{k|k},
+            and time index pred.t.
+
+        Notes
+        -----
+        Assumes ``z`` is compatible with the observation dimension and the
+        innovation covariance is invertible up to the configured jitter.
         """
         x_pred = np.asarray(pred.mean, dtype=float)
         P_pred = np.asarray(pred.cov, dtype=float)
@@ -241,17 +345,25 @@ class ExtendedKalmanFilter:
         return EKFState(mean=x_post, cov=P_post, t=pred.t)
 
     def step(self, state: EKFState, z: Array, u: Optional[Array] = None) -> EKFState:
-        """Run a full EKF step (predict then update).
+        """Run a full EKF step: predict then update.
 
         Parameters
         ----------
-            state: Previous posterior state.
-            z: Measurement at the next time.
-            u: Optional control input for the motion model.
+        state : EKFState
+            Previous posterior state.
+        z : ndarray, shape (nz,)
+            Measurement at the next time step.
+        u : ndarray, optional
+            Control input for the process model.  ``None`` if no input.
 
         Returns
         -------
-            Updated EKFState at the new time.
+        EKFState
+            Updated posterior state at the next time step.
+
+        Notes
+        -----
+        Equivalent to calling :meth:`predict` followed by :meth:`update`.
         """
         pred = self.predict(state, u=u)
         return self.update(pred, z=z)

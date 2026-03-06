@@ -18,6 +18,12 @@ import numpy as np
 import pytest
 import tensorflow as tf
 
+tfp = pytest.importorskip(
+    "tensorflow_probability",
+    exc_type=ImportError,
+    reason="TensorFlow Probability is unavailable or incompatible with the installed TensorFlow version.",
+)
+
 from models.tf_core import KFResultsTF, lgssm_log_likelihood
 from models.tf_ssm_models import (
     LGSSM_TFP,

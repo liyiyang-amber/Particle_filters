@@ -34,6 +34,11 @@ class DynamicsConfig:
     ----------
     dt : float
         Time step (seconds).
+
+    Notes
+    -----
+    Assumes a constant-velocity motion model with state ordering
+    ``[x, y, vx, vy]``.
     """
 
     dt: float = 1.0
@@ -61,6 +66,11 @@ class ScenarioConfig:
         Random generator seed for reproducibility.
     use_article_init : bool
         If True and n_targets == 4, use the article's X0 states.
+
+    Notes
+    -----
+    Assumes the sensor grid lies within the rectangular area specified by
+    ``area_xy``.
     """
 
     n_targets: int = 4
@@ -88,6 +98,10 @@ def build_cv_transition(dt: float) -> Array:
     -------
     ndarray
         A (4, 4) numpy array representing the state transition.
+
+    Notes
+    -----
+    Assumes state ordering ``[x, y, vx, vy]``.
     """
     F = np.array(
         [
@@ -114,6 +128,11 @@ def article_process_noise_cov() -> Array:
     -------
     ndarray
         A (4, 4) numpy array.
+
+    Notes
+    -----
+    Returns the fixed covariance used in the referenced article and does not
+    depend on ``dt``.
     """
     V = (1.0 / 20.0) * np.array(
         [
@@ -150,6 +169,10 @@ def article_initial_states(n_targets: int) -> Array:
     ------
     ValueError
         If n_targets is not 4.
+
+    Notes
+    -----
+    Assumes the article setup with exactly four targets.
     """
     if n_targets != 4:
         raise ValueError("Article initial states are defined for n_targets == 4.")
@@ -182,6 +205,10 @@ def make_sensor_grid(area_xy: Tuple[float, float], grid_shape: Tuple[int, int]) 
     -------
     ndarray
         sensors A (S, 2) array of sensor xy-locations.
+
+    Notes
+    -----
+    Assumes boundary-inclusive regular spacing over the rectangular area.
     """
     width, height = area_xy
     n_r, n_c = grid_shape
@@ -221,7 +248,14 @@ def simulate_cv_targets(
 
     Returns
     -------
-        X: A (n_steps, n_targets, 4) array of states [x, y, vx, vy].
+    ndarray
+        Array ``X`` of shape ``(n_steps, n_targets, 4)`` containing states
+        ``[x, y, vx, vy]``.
+
+    Notes
+    -----
+    Assumes independent Gaussian process-noise draws per target and optional
+    reflective boundary handling inside ``area_xy``.
     """
     F = build_cv_transition(dyn_cfg.dt)
     V = article_process_noise_cov()
@@ -291,7 +325,14 @@ def acoustic_measurement_model(
 
     Returns
     -------
-        Z: Array (T, S) of measurements.
+    ndarray
+        Array ``Z`` of shape ``(T, S)`` containing aggregated sensor
+        amplitudes.
+
+    Notes
+    -----
+    Assumes additive contributions from all targets and no extra sensor noise
+    beyond the deterministic amplitude model implemented here.
     """
     T, C = positions.shape[:2]
     S = sensors.shape[0]
@@ -319,12 +360,14 @@ def simulate_acoustic_dataset(cfg: ScenarioConfig, dyn_cfg: DynamicsConfig) -> D
 
     Returns
     -------
-    A dictionary with keys:
-        - "X": (T, C, 4) states [x, y, vx, vy].
-        - "P": (T, C, 2) positions [x, y].
-        - "S": (S, 2) sensor locations.
-        - "Z": (T, S) noiseless sensor measurements.
-        - "meta": small array with [W, H, psi, d0, dt].
+    dict
+        Dictionary with keys ``"X"``, ``"P"``, ``"S"``, ``"Z"``, and
+        ``"meta"``.
+
+    Notes
+    -----
+    Assumes a single scenario draw with reproducibility controlled by
+    ``cfg.seed``.
     """
     rng = np.random.default_rng(cfg.seed)
     sensors = make_sensor_grid(cfg.area_xy, cfg.sensor_grid_shape)

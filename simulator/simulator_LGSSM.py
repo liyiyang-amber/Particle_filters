@@ -25,6 +25,11 @@ class LGSSMSimulationResult:
         Observation matrix (ny, nx).
     D : NDArray
         Measurement-noise input matrix (ny, nw).
+
+    Notes
+    -----
+    Assumes ``X`` and ``Y`` are time-ordered arrays from the same simulation
+    run and share the same number of recorded time steps.
     """
     X: NDArray[np.float64]
     Y: NDArray[np.float64]
@@ -46,14 +51,25 @@ class LGSSMSimulationResult:
         path : str
             Destination file path (without extension for .npz format).
         format : str
-            Output format ('npz').
+            Output format. Currently only ``'npz'`` is supported.
         overwrite : bool, optional
             If False, raises an error when the file already exists. Default is False.
+
+        Returns
+        -------
+        None
+            Writes the simulation arrays to disk.
 
         Raises
         ------
         FileExistsError
             If overwrite is False and the target file already exists.
+
+        Notes
+        -----
+        Assumes the destination directory already exists. The ``format``
+        argument is retained for API compatibility even though only NumPy
+        archive output is implemented.
         """
         
         target = path if path.endswith(".npz") else f"{path}.npz"
@@ -74,8 +90,7 @@ def simulate_lgssm(
     seed: Optional[int] = None,
     burn_in: int = 0,
 ) -> LGSSMSimulationResult:
-    """
-    Simulate data from a linear Gaussian state-space model.
+    """Simulate data from a linear Gaussian state-space model.
 
     The model is defined as:
         x_1 ~ N(0, \Sigma)
@@ -104,11 +119,14 @@ def simulate_lgssm(
     Returns
     -------
     LGSSMSimulationResult
-        Dataclass with two fields:
-            - X : ndarray of shape (N, nx)
-                Simulated latent states x_1, ..., x_N.
-            - Y : ndarray of shape (N, ny)
-                Simulated observations y_1, ..., y_N.
+        Dataclass containing the simulated latent states, observations, and
+        model matrices used to generate them.
+
+    Notes
+    -----
+    Assumes ``A``, ``B``, ``C``, ``D``, and ``Sigma`` have compatible
+    dimensions and that ``Sigma`` is a valid covariance for the initial state.
+    The returned arrays exclude discarded burn-in samples.
 
     """
     rng = np.random.default_rng(seed)

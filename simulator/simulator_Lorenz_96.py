@@ -50,6 +50,10 @@ def l96_rhs(x: Array, F: float = 8.0) -> Array:
     -------
     ndarray of shape (nx,)
         Time derivative dx/dt.
+
+    Notes
+    -----
+    Assumes periodic boundary conditions and a one-dimensional state vector.
     """
     x = np.asarray(x)
     n = x.size
@@ -76,6 +80,10 @@ def rk4_step(x: Array, dt: float, f: Callable[[Array], Array]) -> Array:
     -------
     ndarray of shape (nx,)
         State after one RK4 step.
+
+    Notes
+    -----
+    Assumes ``f`` returns an array with the same shape as ``x``.
     """
     k1 = f(x)
     k2 = f(x + 0.5 * dt * k1)
@@ -115,6 +123,11 @@ def l96_integrate(
     -------
     ndarray of shape (steps+1, nx)
         Trajectory including the initial state at index 0.
+
+    Notes
+    -----
+    Assumes ``steps`` is non-negative and ``rng`` is either ``None`` or a
+    NumPy generator. Process noise is added after each deterministic RK4 step.
     """
     rng = rng or np.random.default_rng()
     x = x0.copy()
@@ -140,6 +153,11 @@ class ObsModel:
         Indices of observed state variables.
     R : ndarray of shape (ny, ny)
         Observation error covariance matrix.
+
+    Notes
+    -----
+    Assumes ``H_idx`` contains valid indices into the state vector and that
+    ``R`` matches the number of observed components.
     """
     H_idx: Array
     R: Array
@@ -203,6 +221,11 @@ class Lorenz96SimulationResult:
         Observation error covariance.
     config : dict
         Configuration parameters used for simulation.
+
+    Notes
+    -----
+    Assumes all stored arrays correspond to the same simulation setup and use
+    consistent time indexing.
     """
     truth_traj: Array
     ensemble_traj: Array

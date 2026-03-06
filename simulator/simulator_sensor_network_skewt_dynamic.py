@@ -40,6 +40,11 @@ class GridConfig:
         Diagonal jitter added to Sigma.
     beta: float
         Length-scale parameter for the exponential kernel.
+
+    Notes
+    -----
+    Assumes ``d`` is a perfect square so the grid can be laid out on a square
+    lattice.
     """
     d: int = 144
     alpha0: float = 1.0
@@ -67,6 +72,11 @@ class DynConfig:
         Added to the diagonal of Sigma when forming the Cholesky to improve numerical stability.
     seed: int | None
         RNG seed for reproducibility.
+
+    Notes
+    -----
+    Assumes ``nu > 2`` for finite variance in the inverse-gamma mixture model
+    typically used by this simulator.
     """
     alpha: float = 0.9
     nu: float = 8.0
@@ -87,6 +97,11 @@ class MeasConfig:
         Multiplicative intensity scale.
     m2: float
         Exponential sensitivity to the latent state.
+
+    Notes
+    -----
+    Assumes the resulting Poisson rates remain numerically tractable after any
+    clipping configured in :class:`DynConfig`.
     """
     m1: float = 1.0
     m2: float = 1.0 / 3.0
@@ -104,6 +119,10 @@ class SimConfig:
         Number of independent trials.
     save_lambda: bool
         Whether to save lambda_k (Poisson rates) as diagnostics.
+
+    Notes
+    -----
+    Assumes trials are independent conditional on their per-trial random seed.
     """
     T: int = 10
     n_trials: int = 1
@@ -113,9 +132,26 @@ class SimConfig:
 def make_lattice(d: int) -> Array:
     """Return (d, 2) array of 2D coordinates for a sqrt(d) x sqrt(d) lattice.
 
-    Sensors are laid out at integer coordinates (0 .. s-1) in both axes.
-    Raises:
-        ValueError: if d is not a perfect square.
+    Sensors are laid out at integer coordinates ``0, …, s-1`` in both axes.
+
+    Parameters
+    ----------
+    d : int
+        Number of sensor locations, which must be a perfect square.
+
+    Returns
+    -------
+    ndarray
+        Array of shape ``(d, 2)`` containing integer lattice coordinates.
+
+    Raises
+    ------
+    ValueError
+        If ``d`` is not a perfect square.
+
+    Notes
+    -----
+    Assumes a square lattice layout.
     """
     s = int(np.sqrt(d))
     if s * s != d:
@@ -145,6 +181,10 @@ def build_spatial_cov(R: Array, alpha0: float, alpha1: float, beta: float) -> Ar
     -------
     ndarray
         (d, d) positive-definite covariance matrix.
+
+    Notes
+    -----
+    Assumes ``R`` has shape ``(d, 2)`` and ``beta`` is positive.
     """
     d = R.shape[0]
     # Pairwise squared distances
@@ -174,6 +214,11 @@ def cholesky_psd(Sigma: Array, jitter: float = 1e-8, max_tries: int = 5) -> Arra
     -------
     ndarray
         Lower-triangular Cholesky factor L such that L @ L.T ≈ Sigma.
+
+    Notes
+    -----
+    Assumes ``Sigma`` is symmetric and sufficiently close to positive definite
+    for jitter-based recovery to succeed.
     """
     try_jitter = jitter
     for _ in range(max_tries):
@@ -205,6 +250,10 @@ def sample_inverse_gamma(shape: float, scale: float, rng: np.random.Generator) -
     -------
     float
         Sample from InvGamma(shape, scale).
+
+    Notes
+    -----
+    Assumes ``shape`` and ``scale`` are positive.
     """
     # numpy.gamma uses shape=k and scale=theta; we want rate = 1/scale => theta = 1/scale
     y = rng.gamma(shape=shape, scale=1.0 / scale)
@@ -216,6 +265,28 @@ def prepare_gamma_vector(d: int, gamma_scale: float, gamma_vec: Optional[Array],
 
     If gamma_vec is provided, it is returned after basic checks.
     Otherwise, generate a random unit vector and scale it by gamma_scale.
+
+    Parameters
+    ----------
+    d : int
+        State dimension.
+    gamma_scale : float
+        Scale applied to a generated unit vector when ``gamma_vec`` is not
+        provided.
+    gamma_vec : ndarray, optional
+        Explicit skew vector.
+    rng : np.random.Generator
+        Random generator used when a new vector must be sampled.
+
+    Returns
+    -------
+    ndarray
+        Skew vector of shape ``(d,)``.
+
+    Notes
+    -----
+    Assumes any supplied ``gamma_vec`` already matches the intended skew
+    direction and scale.
     """
     if gamma_vec is not None:
         gamma_vec = np.asarray(gamma_vec).reshape(-1)
@@ -240,15 +311,26 @@ def simulate_trial(
     The latent dynamics follow a skewed-t AR(1) using a Normal–Inverse-Gamma mixture.
     Measurements are Poisson with log-link to the latent state.
 
-    Returns a dictionary with keys:
-        'X': (T, d) latent states,
-        'Z': (T, d) counts,
-        'Lambda': (T, d) Poisson rates (if save_lambda=True),
-        'Sigma': (d, d) spatial covariance used,
-        'L': (d, d) Cholesky factor used,
-        'R': (d, 2) grid coordinates,
-        'gamma': (d,) skew vector,
-        'meta': configuration snapshot.
+    Parameters
+    ----------
+    grid_cfg : GridConfig
+        Spatial-grid and covariance configuration.
+    dyn_cfg : DynConfig
+        Latent dynamics configuration.
+    meas_cfg : MeasConfig
+        Measurement-model configuration.
+    sim_cfg : SimConfig
+        Trial configuration.
+
+    Returns
+    -------
+    dict
+        Dictionary with keys ``'X'``, ``'Z'``, optional ``'Lambda'``,
+        ``'Sigma'``, ``'L'``, ``'R'``, ``'gamma'``, and ``'meta'``.
+
+    Notes
+    -----
+    Assumes a single independent trial seeded by ``dyn_cfg.seed``.
     """
     # RNG
     rng = np.random.default_rng(dyn_cfg.seed)
@@ -325,9 +407,27 @@ def simulate_many(
 ) -> Dict[str, Any]:
     """Simulate multiple independent trials and stack outputs.
 
-    Returns a dictionary with keys:
-        'X': (n_trials, T, d), 'Z': (n_trials, T, d), optionally 'Lambda',
-        plus shared 'Sigma', 'L', 'R', 'gamma' (per trial in a list) and 'meta'.
+    Parameters
+    ----------
+    grid_cfg : GridConfig
+        Spatial-grid and covariance configuration.
+    dyn_cfg : DynConfig
+        Dynamics configuration used as the trial template.
+    meas_cfg : MeasConfig
+        Measurement-model configuration.
+    sim_cfg : SimConfig
+        Multi-trial configuration.
+
+    Returns
+    -------
+    dict
+        Dictionary containing stacked latent states and observations, optional
+        Poisson rates, and per-trial metadata lists.
+
+    Notes
+    -----
+    Assumes trials are independent and are made reproducible by offsetting the
+    base random seed when one is provided.
     """
     n = sim_cfg.n_trials
     T, d = sim_cfg.T, grid_cfg.d
@@ -363,7 +463,19 @@ def simulate_many(
 def save_npz(path: str, data: Dict[str, Any]) -> None:
     """Save dictionary of numpy arrays / lists to a .npz file.
 
-    Lists of arrays (e.g., Sigma_list) are saved as an object array.
+    Lists of arrays (e.g., ``Sigma_list``) are saved as an object array.
+
+    Parameters
+    ----------
+    path : str
+        Target ``.npz`` path.
+    data : dict
+        Dictionary produced by :func:`simulate_trial` or :func:`simulate_many`.
+
+    Returns
+    -------
+    None
+        Writes the provided data to disk.
     """
     to_save = {}
     for k, v in data.items():
@@ -375,7 +487,18 @@ def save_npz(path: str, data: Dict[str, Any]) -> None:
 
 
 def load_npz(path: str) -> Dict[str, Any]:
-    """Load a dataset saved by :func:`save_npz`."""
+    """Load a dataset saved by :func:`save_npz`.
+
+    Parameters
+    ----------
+    path : str
+        Path to a previously saved ``.npz`` archive.
+
+    Returns
+    -------
+    dict
+        Dictionary containing arrays and reconstructed object-list entries.
+    """
     with np.load(path, allow_pickle=True) as f:
         return {k: f[k].tolist() if f[k].dtype == object else f[k] for k in f.files}
     

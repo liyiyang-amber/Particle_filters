@@ -1,10 +1,34 @@
 """
-Kalman filter implementation.
+Kalman Filter (KF) for linear Gaussian state-space models.
+
+Implements the general (time-varying) Kalman filter under the model::
+
+    x_k   = Phi_{k-1} x_{k-1} + B_{k-1} u_{k-1} + Gamma_{k-1} w_{k-1}
+    y_k   = H_k x_k + v_k
+
+with E[w_k w_ℓ^T] = Q_k δ_{kℓ} and E[v_k v_ℓ^T] = R_k δ_{kℓ}.
+
+All matrices may be time-varying (passed as sequences of length N) or
+time-invariant (passed as a single array, which is broadcast over all steps).
+
+Public API
+----------
+kalman_filter_general : main entry point.
+
+Shared utilities from :mod:`base_ssm`
+--------------------------------------
+:func:`~base_ssm.chol_solve` is used instead of a private helper.
 """
 from dataclasses import dataclass
 from typing import Optional, Sequence, Tuple, Union
 import numpy as np
 from numpy.typing import NDArray
+
+try:
+    from models.base_ssm import chol_solve as _chol_solve_shared
+except ModuleNotFoundError:  # running from within models/
+    from base_ssm import chol_solve as _chol_solve_shared
+
 Array = NDArray[np.float64]
 
 
@@ -30,6 +54,11 @@ class KFResults:
         Innovation covariances S_k = H_k P_k^- H_k^T + R_k.
     loglik : float
         Total Gaussian log-likelihood of observations under the model.
+
+    Notes
+    -----
+    Assumes all arrays share the same leading time dimension ``N`` and are
+    produced by one run of :func:`kalman_filter_general`.
     """
 
     x_pred: Array
@@ -43,8 +72,30 @@ class KFResults:
 
 
 def _as_sequence(M: Union[Array, Sequence[Array]], N: int, name: str) -> Sequence[Array]:
-    """Return a per-time-step sequence for matrix/tensor parameters.
-    If `M` is a single array, repeat it N times; otherwise validate length.
+    """Return a per-time-step sequence for a matrix/tensor parameter.
+
+    If ``M`` is a single :class:`numpy.ndarray`, it is treated as
+    time-invariant and repeated ``N`` times.  Otherwise ``M`` must be a
+    sequence of exactly ``N`` arrays.
+
+    Parameters
+    ----------
+    M : ndarray or sequence of ndarrays
+        Time-invariant matrix or a length-N sequence of matrices.
+    N : int
+        Required sequence length (number of time steps).
+    name : str
+        Parameter name, used in the error message on length mismatch.
+
+    Returns
+    -------
+    list of ndarray
+        Length-N list of matrices.
+
+    Raises
+    ------
+    ValueError
+        If ``M`` is a sequence whose length differs from ``N``.
     """
     if isinstance(M, np.ndarray):
         return [M] * N
@@ -55,25 +106,24 @@ def _as_sequence(M: Union[Array, Sequence[Array]], N: int, name: str) -> Sequenc
 
 
 def _chol_solve(L: Array, B: Array) -> Array:
-    """Solve (L L^T) X = B for X using triangular solves with Cholesky factor L.
+    """Solve (L L^T) X = B using triangular solves with Cholesky factor L.
+
+    Delegates to :func:`base_ssm.chol_solve`; kept for backward
+    compatibility with any code that calls this private helper directly.
 
     Parameters
     ----------
     L : ndarray, shape (m, m)
         Lower-triangular Cholesky factor.
     B : ndarray, shape (m, k)
-        Right-hand side.
+        Right-hand side matrix.
 
     Returns
     -------
-    ndarray
-        Solution X of shape (m, k).
+    ndarray, shape (m, k)
+        Solution X of (L L^T) X = B.
     """
-    # Solve L Z = B
-    Z = np.linalg.solve(L, B)
-    # Solve L^T X = Z
-    X = np.linalg.solve(L.T, Z)
-    return X
+    return _chol_solve_shared(L, B)
 
 
 def kalman_filter_general(
@@ -133,6 +183,12 @@ def kalman_filter_general(
     KFResults
         Dataclass containing priors, posteriors, gains, innovations, S_k, and
         total log-likelihood.
+
+    Notes
+    -----
+    Assumes all matrix inputs are dimensionally compatible and that each
+    innovation covariance is numerically positive definite after adding
+    ``jitter``.
     """
 
     if Y.ndim != 2:

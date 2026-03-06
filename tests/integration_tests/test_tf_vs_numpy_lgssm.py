@@ -21,6 +21,12 @@ import numpy as np
 import pytest
 import tensorflow as tf
 
+tfp = pytest.importorskip(
+    "tensorflow_probability",
+    exc_type=ImportError,
+    reason="TensorFlow Probability is unavailable or incompatible with the installed TensorFlow version.",
+)
+
 from models.kalman_filter import kalman_filter_general
 from models.tf_core import KFResultsTF, kalman_filter_tf, lgssm_log_likelihood
 from models.tf_particle_filter import ParticleFilterTF, run_particle_filter_tf

@@ -1,5 +1,29 @@
 """
-TF/TFP State-Space Model definitions.
+TensorFlow / TensorFlow Probability state-space model definitions.
+
+Provides ready-to-use SSM classes whose log-likelihoods are differentiable
+with respect to model parameters (via ``tf.GradientTape``), together with
+HMC/NUTS target builders and a convenience sampler for Bayesian parameter
+estimation.
+
+Classes
+-------
+LGSSM_TFP
+    Linear Gaussian SSM with exact Kalman-filter log-likelihood.
+NonlinSSM_TFP
+    Scalar nonlinear SSM (SMC benchmark) with EKF-approximated
+    log-likelihood.
+
+Functions
+---------
+make_lgssm_hmc_target
+    Build a TFP ``target_log_prob_fn`` for learning the process-noise
+    covariance :math:`Q` of an LGSSM via HMC.
+make_nonlinssm_hmc_target
+    Build a TFP ``target_log_prob_fn`` for learning :math:`\\sigma_v` and
+    :math:`\\sigma_w` of the nonlinear SSM via HMC.
+run_hmc
+    Run TFP HMC or NUTS and return posterior samples.
 """
 
 from __future__ import annotations
@@ -30,16 +54,39 @@ Tensor = tf.Tensor
 
 # 1.  LGSSM_TFP
 class LGSSM_TFP:
-    """Linear Gaussian SSM with exact KF log-likelihood.
+    """Linear Gaussian SSM with exact Kalman-filter log-likelihood.
+
+    The model is:
+
+    .. math::
+
+        x_k &= F x_{k-1} + v_k, \\quad v_k \\sim \\mathcal{N}(0, Q) \\\\
+        y_k &= H x_k + w_k,     \\quad w_k \\sim \\mathcal{N}(0, R)
+
+    with initial distribution
+    :math:`x_0 \\sim \\mathcal{N}(m_0, P_0)`.
 
     Parameters
     ----------
-    F   : (nx, nx) state transition
-    H   : (ny, nx) observation matrix
-    Q   : (nx, nx) process noise covariance
-    R   : (ny, ny) observation noise covariance
-    m0  : (nx,)    initial mean
-    P0  : (nx, nx) initial covariance
+    F : ndarray, shape (nx, nx)
+        State transition matrix.
+    H : ndarray, shape (ny, nx)
+        Observation matrix.
+    Q : ndarray, shape (nx, nx)
+        Process noise covariance.
+    R : ndarray, shape (ny, ny)
+        Observation noise covariance.
+    m0 : ndarray, shape (nx,)
+        Initial state mean.
+    P0 : ndarray, shape (nx, nx)
+        Initial state covariance.
+
+    Notes
+    -----
+    Assumes ``F``, ``H``, ``Q``, ``R``, ``m0``, and ``P0`` are dimensionally
+    compatible. Cholesky-based computations further assume ``Q``, ``R``, and
+    ``P0`` are at least numerically positive semidefinite after internal
+    diagonal regularisation.
     """
 
     def __init__(
@@ -61,31 +108,66 @@ class LGSSM_TFP:
     # @tf.function is applied on the static helper; calling log_prob() is
     # gradient-safe (GradientTape can differentiate through lgssm_log_likelihood).
     def log_prob(self, Y: Tensor) -> Tensor:
-        """Exact marginal log-likelihood  log p(y_{1:T}).
+        """Compute the exact marginal log-likelihood :math:`\\log p(y_{1:T})`.
 
         Parameters
         ----------
-        Y : (T, ny) observations (tf.Tensor or numpy)
+        Y : Tensor or ndarray, shape (T, ny)
+            Sequence of observations.
 
         Returns
         -------
-        Scalar Tensor
+        log_lik : Tensor, scalar float32
+            Kalman-filter marginal log-likelihood.
         """
         return lgssm_log_likelihood(
             _to_f32(Y), self.F, self.H, self.Q, self.R, self.m0, self.P0
         )
 
     def filter(self, Y: Tensor):
-        """Run the full Kalman filter and return KFResultsTF."""
+        """Run the full Kalman filter and return filtering results.
+
+        Parameters
+        ----------
+        Y : Tensor or ndarray, shape (T, ny)
+            Sequence of observations.
+
+        Returns
+        -------
+        results : KFResultsTF
+            Container returned by :func:`models.tf_core.kalman_filter_tf`
+            containing predicted and filtered moments together with
+            likelihood diagnostics.
+
+        Notes
+        -----
+        Assumes ``Y`` is a time-ordered observation tensor with shape
+        ``(T, ny)``.
+        """
         return kalman_filter_tf(
             _to_f32(Y), self.F, self.H, self.Q, self.R, self.m0, self.P0
         )
 
     # TFP JointDistribution (optional – requires TFP)
     def as_joint_distribution(self):
-        """Return a TFP JointDistributionSequential for the LGSSM.
+        """Return a TFP joint distribution representation of the LGSSM.
 
-        Useful for posterior sampling with tfp.mcmc.
+        Returns
+        -------
+        joint : tfd.JointDistributionSequential
+            Joint distribution over the initial state, one transition, and
+            one observation kernel, suitable for TFP-based posterior methods.
+
+        Notes
+        -----
+        Assumes TensorFlow Probability is installed and the stored covariance
+        matrices admit numerically stable Cholesky factors after adding a
+        small diagonal jitter.
+
+        Raises
+        ------
+        ImportError
+            If ``tensorflow_probability`` is not installed.
         """
         if not _HAS_TFP:
             raise ImportError("tensorflow_probability is required.")
@@ -127,11 +209,22 @@ class NonlinSSM_TFP:
 
     Parameters
     ----------
-    sigma_v   : process noise std-dev (tf.Variable or Tensor for gradient flow)
-    sigma_w   : measurement noise std-dev
-    T         : sequence length
-    x0_mean   : initial state mean (default 0)
-    x0_std    : initial state std  (default 1)
+    sigma_v : float, optional
+        Process noise standard deviation.  Default ``1.0``.
+    sigma_w : float, optional
+        Measurement noise standard deviation.  Default ``1.0``.
+    T : int, optional
+        Sequence length.  Default ``100``.
+    x0_mean : float, optional
+        Initial state mean.  Default ``0.0``.
+    x0_std : float, optional
+        Initial state standard deviation.  Default ``1.0``.
+
+    Notes
+    -----
+    Assumes a scalar latent state and scalar observations. The public
+    log-probability methods in this class use Gaussian approximations rather
+    than exact nonlinear marginalisation.
     """
 
     def __init__(
@@ -152,12 +245,46 @@ class NonlinSSM_TFP:
 
     @staticmethod
     def _f(x: Tensor, k: Tensor) -> Tensor:
-        """Deterministic part of the transition."""
+        """Compute the deterministic part of the state transition.
+
+        Parameters
+        ----------
+        x : Tensor, scalar float32
+            Current state value.
+        k : Tensor, scalar int32
+            Current time index (1-based).
+
+        Returns
+        -------
+        f_x : Tensor, scalar float32
+            Deterministic state prediction at time ``k``.
+
+        Notes
+        -----
+        Assumes ``k`` follows the one-based indexing convention from the
+        standard benchmark model definition.
+        """
         k_f = tf.cast(k, F32)
         return x / 2.0 + 25.0 * x / (1.0 + x * x) + 8.0 * tf.cos(1.2 * k_f)
 
     @staticmethod
     def _h(x: Tensor) -> Tensor:
+        """Compute the observation function :math:`h(x) = x^2 / 20`.
+
+        Parameters
+        ----------
+        x : Tensor, scalar float32
+            State value.
+
+        Returns
+        -------
+        h_x : Tensor, scalar float32
+            Predicted observation.
+
+        Notes
+        -----
+        Assumes scalar latent state input.
+        """
         return x * x / 20.0
 
     # ---- exact log-likelihood via @tf.function scan ----
@@ -166,12 +293,25 @@ class NonlinSSM_TFP:
                                    tf.TensorSpec(shape=[], dtype=F32),
                                    tf.TensorSpec(shape=[], dtype=F32)])
     def log_prob_tf(self, Y: Tensor, sigma_v: Tensor, sigma_w: Tensor) -> Tensor:
-        """Bootstrap-filter marginal log p(y_{1:T} | sigma_v, sigma_w).
+        """Compute the EKF-approximated marginal log-likelihood.
 
-        Uses a *deterministic* single-particle EKF approximation for
-        gradient-based optimisation / HMC warm-up.  For exact marginal
-        likelihoods use a particle-filter estimate via
-        NonlinSSM_TFP.log_prob_pf().
+        Uses a single-particle EKF approximation for gradient-based
+        optimisation and HMC warm-up.  For exact marginal likelihoods
+        use :meth:`log_prob_pf` with a particle filter.
+
+        Parameters
+        ----------
+        Y : Tensor, shape (T,)
+            Scalar observation sequence.
+        sigma_v : Tensor, scalar float32
+            Process noise standard deviation.
+        sigma_w : Tensor, scalar float32
+            Measurement noise standard deviation.
+
+        Returns
+        -------
+        log_lik : Tensor, scalar float32
+            Sum of per-step EKF log-likelihood contributions.
         """
         T   = tf.shape(Y)[0]
         log2pi = tf.constant(math.log(2.0 * math.pi), dtype=F32)
@@ -209,7 +349,18 @@ class NonlinSSM_TFP:
         return tf.reduce_sum(ll_steps)
 
     def log_prob(self, Y: Tensor) -> Tensor:
-        """EKF-approximated log p(y_{1:T}) using stored sigma_v, sigma_w."""
+        """Compute the EKF-approximated log-likelihood using stored noise parameters.
+
+        Parameters
+        ----------
+        Y : Tensor or ndarray, shape (T,)
+            Scalar observation sequence.
+
+        Returns
+        -------
+        log_lik : Tensor, scalar float32
+            Approximate marginal log-likelihood.
+        """
         return self.log_prob_tf(_to_f32(Y), self.sigma_v, self.sigma_w)
 
 
@@ -223,19 +374,39 @@ def make_lgssm_hmc_target(
     P0:  np.ndarray,
     nx:  int,
 ) -> Callable:
-    """Return a target_log_prob_fn for learning log-Cholesky of Q via HMC.
+    """Build a TFP ``target_log_prob_fn`` for learning the process-noise covariance.
 
-    The free parameter is `log_L_flat` – the flattened lower-triangular
-    log-Cholesky of Q (lower-triangular entries; diagonal is in log-space).
+    The free parameter is ``log_L_flat`` — the flattened lower-triangular
+    entries of the log-Cholesky factor of :math:`Q`.  Diagonal entries are
+    stored in log-space so the optimiser works in an unconstrained space.
 
     Parameters
     ----------
-    Y, F, H, R, m0, P0 : model matrices / observations
-    nx                 : state dimension
+    Y : ndarray, shape (T, ny)
+        Observation sequence.
+    F : ndarray, shape (nx, nx)
+        State transition matrix.
+    H : ndarray, shape (ny, nx)
+        Observation matrix.
+    R : ndarray, shape (ny, ny)
+        Observation noise covariance (fixed).
+    m0 : ndarray, shape (nx,)
+        Initial state mean.
+    P0 : ndarray, shape (nx, nx)
+        Initial state covariance.
+    nx : int
+        State dimension.
 
     Returns
     -------
-    Callable  target(log_L_flat) -> scalar Tensor  (log posterior)
+    target : callable
+        ``target(log_L_flat) -> scalar Tensor`` — the unnormalised log
+        posterior used as the HMC/NUTS target.
+
+    Raises
+    ------
+    ImportError
+        If ``tensorflow_probability`` is not installed.
     """
     if not _HAS_TFP:
         raise ImportError("tensorflow_probability is required.")
@@ -272,17 +443,31 @@ def make_nonlinssm_hmc_target(
     x0_mean:   float = 0.0,
     x0_std:    float = 1.0,
 ) -> Callable:
-    """Return a target_log_prob_fn for learning (log sigma_v, log sigma_w).
+    """Build a TFP ``target_log_prob_fn`` for learning the noise parameters.
+
+    The free parameters are ``(log_sigma_v, log_sigma_w)`` — log-space
+    representations of the process and measurement noise standard deviations
+    for the scalar nonlinear SSM.
 
     Parameters
     ----------
-    Y        : (T,) observations
-    x0_mean  : prior initial state mean
-    x0_std   : prior initial state std
+    Y : ndarray, shape (T,)
+        Scalar observation sequence.
+    x0_mean : float, optional
+        Initial state mean for the EKF.  Default ``0.0``.
+    x0_std : float, optional
+        Initial state standard deviation for the EKF.  Default ``1.0``.
 
     Returns
     -------
-    Callable  target(log_sigma_v, log_sigma_w) -> scalar Tensor
+    target : callable
+        ``target(log_sigma_v, log_sigma_w) -> scalar Tensor`` — the
+        unnormalised log posterior used as the HMC/NUTS target.
+
+    Raises
+    ------
+    ImportError
+        If ``tensorflow_probability`` is not installed.
     """
     if not _HAS_TFP:
         raise ImportError("tensorflow_probability is required.")
@@ -318,22 +503,43 @@ def run_hmc(
     num_leapfrog:       int   = 10,
     use_nuts:           bool  = False,
 ) -> Tuple:
-    """Run TFP HMC or NUTS and return (samples, is_accepted, log_probs).
+    """Run TFP HMC or NUTS and return posterior samples.
+
+    Dual-averaging step-size adaptation is applied during the burn-in
+    phase.  The adapted kernel is used unchanged during the sampling phase.
 
     Parameters
     ----------
-    target_log_prob_fn : callable  (theta -> scalar log-prob)
-    init_state         : list of initial Tensors
-    num_results        : posterior samples to collect
-    num_burnin         : warm-up steps (discarded)
-    step_size          : HMC step size (or NUTS initial step)
-    num_leapfrog       : leapfrog steps per HMC transition (unused for NUTS)
-    use_nuts           : if True use NoUTurnSampler, else HamiltonianMonteCarlo
+    target_log_prob_fn : callable
+        Function mapping a list of parameter tensors to a scalar log
+        unnormalised posterior density.
+    init_state : sequence of Tensor
+        Starting point for the Markov chain; one tensor per free parameter.
+    num_results : int, optional
+        Number of posterior samples to collect after burn-in.
+        Default ``1000``.
+    num_burnin : int, optional
+        Number of warm-up steps (discarded).  Default ``500``.
+    step_size : float, optional
+        Initial HMC step size (or NUTS initial step size).  Default ``0.01``.
+    num_leapfrog : int, optional
+        Number of leapfrog steps per HMC transition.  Ignored when
+        ``use_nuts=True``.  Default ``10``.
+    use_nuts : bool, optional
+        If ``True``, use :class:`tfp.mcmc.NoUTurnSampler`; otherwise use
+        :class:`tfp.mcmc.HamiltonianMonteCarlo`.  Default ``False``.
 
     Returns
     -------
-    samples    : list of Tensor  (num_results, ...)
-    is_accepted: bool Tensor  (num_results,)
+    samples : list of Tensor, each shape (num_results, ...)
+        Posterior samples for each free parameter.
+    is_accepted : Tensor of bool, shape (num_results,)
+        Per-step acceptance indicator.
+
+    Raises
+    ------
+    ImportError
+        If ``tensorflow_probability`` is not installed.
     """
     if not _HAS_TFP:
         raise ImportError("tensorflow_probability is required.")

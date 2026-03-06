@@ -1,5 +1,15 @@
 """
-Differentiable Particle Filter with soft Resampling
+Differentiable Particle Filter with soft resampling.
+
+Implements a differentiable particle filter that uses Gumbel-Softmax
+reparameterisation to make the resampling step differentiable.  The
+resampling distribution is a mixture of the importance weights with a
+uniform distribution (soft-resampling), controlled by the ``soft_alpha``
+parameter.
+
+Classes
+-------
+DifferentiableParticleFilter – Main filter class (``tf.Module`` subclass).
 """
 import numpy as np
 import tensorflow as tf
@@ -174,19 +184,19 @@ class DifferentiableParticleFilter(tf.Module):
 
     @staticmethod
     def _sample_gumbel(shape, eps=1e-20):
-        """Sample i.i.d. Gumbel(0,1) variables.
+        """Sample i.i.d. Gumbel(0, 1) random variables.
 
         Parameters
         ----------
-        shape: tuple
+        shape : tuple of int
             Shape of the output tensor.
-        eps: float, optional
-            Small constant for numerical stability. Defaults to 1e-20.
+        eps : float, optional
+            Small constant added for numerical stability.  Default is ``1e-20``.
 
         Returns
         -------
         Tensor
-            Gumbel(0,1) samples of specified shape.
+            Gumbel(0, 1) samples with the given ``shape``.
         """
         u = tf.random.uniform(shape, minval=eps, maxval=1.0 - eps)
         return -tf.math.log(-tf.math.log(u))
@@ -196,15 +206,16 @@ class DifferentiableParticleFilter(tf.Module):
 
         Parameters
         ----------
-        log_probs: Tensor
-            Log probabilities of shape (..., K), unnormalized is OK.
-        temperature: float
-            Scalar temperature > 0.
+        log_probs : Tensor
+            Log-probabilities of shape ``(..., K)``; need not be normalised.
+        temperature : float
+            Temperature scalar ``> 0``.  Smaller values produce harder
+            (more one-hot) assignments.
 
         Returns
         -------
-        Tensor 
-            Soft one-hot vectors of shape (..., K).
+        Tensor
+            Soft one-hot vectors of shape ``(..., K)``.
         """
         g = self._sample_gumbel(tf.shape(log_probs))
         y = tf.nn.softmax((log_probs + g) / temperature, axis=-1)
@@ -248,7 +259,7 @@ class DifferentiableParticleFilter(tf.Module):
         eps = tf.random.normal((batch_size, N, d), dtype=tf.float32)
         # Apply Cholesky: eps @ L^T
         L = init_cov_chol  # (B, d, d)
-        noise = tf.einsum("bnd,bdk->bnk", eps, L)
+        noise = tf.einsum("bnd,bkd->bnk", eps, L)
 
         # Broadcast mean to (B, N, d)
         mean_expanded = tf.expand_dims(init_mean, axis=1)  # (B,1,d)
@@ -268,25 +279,27 @@ class DifferentiableParticleFilter(tf.Module):
 
         Parameters
         ----------
-        particles: Tensor
-            Previous particle states of shape (B, N, d).
-        log_weights: Tensor
-            Previous log weights of shape (B, N).
-        observation: Tensor
-            Current observation of shape (B, obs_dim).
-        params: dict, optional
-            Parameters passed to transition and likelihood functions.
-            Defaults to None.
-        return_diagnostics: bool, optional
-            If True, return diagnostic metrics.
-            Defaults to False.
+        particles : Tensor, shape (B, N, d)
+            Previous particle states.
+        log_weights : Tensor, shape (B, N)
+            Previous log-weights (need not be normalised).
+        observation : Tensor, shape (B, obs_dim)
+            Current observation.
+        params : dict, optional
+            Additional parameters forwarded to the transition and likelihood
+            functions.  Default is ``None`` (empty dict).
+        return_diagnostics : bool, optional
+            If ``True``, return a third element containing diagnostic tensors.
+            Default is ``False``.
 
         Returns
         -------
-        Tuple
-            If return_diagnostics is False, returns (new_particles, new_log_weights).
-                new_particles has shape (B, N, d), new_log_weights has shape (B, N).
-                If return_diagnostics is True, also returns diagnostics dict as third element.
+        new_particles : Tensor, shape (B, N, d)
+            Updated particle states after propagation and soft-resampling.
+        new_log_weights : Tensor, shape (B, N)
+            Uniform log-weights after resampling.
+        diagnostics : dict
+            Diagnostic tensors (only returned when ``return_diagnostics=True``).
         """
         if params is None:
             params = {}
@@ -370,32 +383,36 @@ class DifferentiableParticleFilter(tf.Module):
     # Full filtering over a sequence
     def filter(self, observations, init_mean, init_cov_chol, params=None, 
                return_diagnostics=False, ground_truth=None):
-        """Run differentiable particle filter over a sequence of observations.
+        """Run the differentiable particle filter over a sequence of observations.
 
         Parameters
         ----------
-        observations: Tensor
-            Observation sequence of shape (B, T, obs_dim).
-        init_mean: Tensor
-            Initial prior mean, see init_particles.
-        init_cov_chol: Tensor
-            Initial prior covariance Cholesky factor, see init_particles.
-        params: dict, optional
-            Parameters for transition and likelihood functions.
-                Can be static or contain time-dependent tensors. Defaults to None.
-        return_diagnostics: bool, optional
-            If True, return detailed diagnostic metrics.
-                Defaults to False.
-        ground_truth: Tensor, optional
-            True states of shape (B, T+1, state_dim)
-                for computing RMSE. Defaults to None.
+        observations : Tensor, shape (B, T, obs_dim)
+            Full observation sequence.
+        init_mean : Tensor, shape (state_dim,) or (B, state_dim)
+            Initial prior mean; see ``init_particles``.
+        init_cov_chol : Tensor, shape (state_dim, state_dim) or (B, state_dim, state_dim)
+            Lower Cholesky factor of the initial prior covariance; see
+            ``init_particles``.
+        params : dict, optional
+            Parameters forwarded to transition and likelihood functions.
+            Default is ``None`` (empty dict).
+        return_diagnostics : bool, optional
+            If ``True``, collect and return per-step diagnostic tensors.
+            Default is ``False``.
+        ground_truth : Tensor, shape (B, T+1, state_dim), optional
+            True state sequence used to compute RMSE when provided.
+            Default is ``None``.
 
         Returns
         -------
-        Tuple
-            If return_diagnostics is False, returns (particles_seq, logw_seq).
-                particles_seq has shape (B, T+1, N, d), logw_seq has shape (B, T+1, N).
-            If return_diagnostics is True, also returns diagnostics dict as third element.
+        particles_seq : Tensor, shape (B, T+1, N, d)
+            Particle ensemble at every time step (t = 0 … T).
+        logw_seq : Tensor, shape (B, T+1, N)
+            Log-weights at every time step.
+        diagnostics : dict
+            Aggregated diagnostic statistics (only returned when
+            ``return_diagnostics=True``).
         """
         if params is None:
             params = {}
@@ -464,17 +481,18 @@ class DifferentiableParticleFilter(tf.Module):
         return particles_seq, logw_seq
     
     def _aggregate_diagnostics(self, diagnostics_list):
-        """Aggregate per-timestep diagnostics into summary statistics.
+        """Aggregate per-timestep diagnostic dicts into summary statistics.
 
         Parameters
         ----------
-        diagnostics_list: list
-            List of diagnostic dictionaries from each timestep.
+        diagnostics_list : list of dict
+            One dict per timestep, as returned by ``step(..., return_diagnostics=True)``.
 
         Returns
         -------
         dict
-            Aggregated statistics with mean, std, min, and max values.
+            For each key, aggregated tensors with suffixes ``_mean``, ``_std``,
+            ``_min``, ``_max``; or a nested dict for dictionary-valued entries.
         """
         if not diagnostics_list:
             return {}
@@ -511,21 +529,21 @@ class DifferentiableParticleFilter(tf.Module):
         return aggregated
     
     def _compute_rmse_sequence(self, particles_seq, logw_seq, ground_truth):
-        """Compute RMSE at each timestep between weighted particle mean and ground truth.
+        """Compute per-timestep RMSE between the weighted particle mean and ground truth.
 
         Parameters
         ----------
-        particles_seq: Tensor
-            Particle sequence of shape (B, T+1, N, d).
-        logw_seq: Tensor
-            Log-weight sequence of shape (B, T+1, N).
-        ground_truth: Tensor
-            True state sequence of shape (B, T+1, d).
+        particles_seq : Tensor, shape (B, T+1, N, d)
+            Particle ensemble sequence.
+        logw_seq : Tensor, shape (B, T+1, N)
+            Log-weight sequence.
+        ground_truth : Tensor, shape (B, T+1, d)
+            True state sequence.
 
         Returns
         -------
-        Tensor
-            RMSE at each timestep (averaged over batch), shape (T+1,).
+        Tensor, shape (T+1,)
+            RMSE at each timestep, averaged over the batch dimension.
         """
         # Compute weighted mean: sum_i w_i * x_i
         weights = tf.exp(logw_seq)  # (B, T+1, N)

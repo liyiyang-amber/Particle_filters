@@ -1,5 +1,23 @@
 """
-TF/TFP core: JIT-compiled Kalman filter, EKF, and UKF.
+TensorFlow/TFP core utilities: JIT-compiled Kalman filter, EKF, and UKF.
+
+Provides TF-native implementations of the core Gaussian filters that can
+be used as differentiable ``GaussianTracker`` components inside the EDH and
+LEDH particle flow filters.
+
+Classes
+-------
+EKFStateTF  – State dataclass for the step-by-step EKF tracker.
+EKFTrackerTF – Extended Kalman Filter implemented with ``tf.GradientTape``
+               Jacobians and compatible with the ``GaussianTracker`` protocol.
+UKFStateTF  – State dataclass for the step-by-step UKF tracker.
+UKFTrackerTF – Unscented Kalman Filter with sigma-point propagation,
+               also compatible with ``GaussianTracker``.
+
+Functions
+---------
+lgssm_log_likelihood – JIT-compiled LGSSM log-likelihood via Kalman recursion.
+kalman_filter_tf     – Full forward Kalman filter returning all arrays.
 """
 
 from __future__ import annotations
@@ -28,21 +46,35 @@ F32 = tf.float32
 
 # Helpers
 def _to_f32(x) -> Tensor:
+    """Cast *x* to a ``tf.float32`` tensor."""
     return tf.cast(tf.convert_to_tensor(x), F32)
 
 
 def _symmetrise(M: Tensor) -> Tensor:
-    """Enforce exact symmetry: (M + M^T) / 2."""
+    """Return ``(M + Mᵀ) / 2`` to enforce exact symmetry."""
     return 0.5 * (M + tf.linalg.matrix_transpose(M))
 
 
 def _chol_logdet(L: Tensor) -> Tensor:
-    """log|M| = 2 * sum(log diag(L)) where M = L L^T."""
+    """Return ``log|M|`` given the Cholesky factor ``L`` where ``M = L Lᵀ``."""
     return 2.0 * tf.reduce_sum(tf.math.log(tf.linalg.diag_part(L)))
 
 
 def _chol_solve_vec(L: Tensor, v: Tensor) -> Tensor:
-    """Solve (L L^T) x = v using triangular solves."""
+    """Solve ``(L Lᵀ) x = v`` for ``x`` using two triangular solves.
+
+    Parameters
+    ----------
+    L : Tensor, shape (..., n, n)
+        Lower-triangular Cholesky factor.
+    v : Tensor, shape (..., n)
+        Right-hand-side vector.
+
+    Returns
+    -------
+    Tensor, shape (..., n)
+        Solution vector ``x = (L Lᵀ)⁻¹ v``.
+    """
     # v shape: (..., n)  ->  reshape to (..., n, 1), solve, squeeze
     v_ = tf.expand_dims(v, -1)
     x_ = tf.linalg.triangular_solve(L, v_, lower=True)
@@ -94,21 +126,33 @@ def lgssm_log_likelihood(
     m0: Tensor,
     P0: Tensor,
 ) -> Tensor:
-    """Kalman-filter log-likelihood  log p(y_{1:T} | F, H, Q, R, m0, P0).
+    """Kalman-filter log-likelihood log p(y_{1:T} | F, H, Q, R, m0, P0).
+
+    Computes the marginal log-likelihood by running the Kalman recursion and
+    summing the per-step Gaussian log-likelihoods.  The function is compiled
+    with ``@tf.function`` and accepts only ``tf.float32`` inputs.
 
     Parameters
     ----------
-    Y  : (T, ny)  observation sequence
-    F  : (nx, nx) state-transition matrix
-    H  : (ny, nx) observation matrix
-    Q  : (nx, nx) process-noise covariance
-    R  : (ny, ny) measurement-noise covariance
-    m0 : (nx,)    initial state mean
-    P0 : (nx, nx) initial state covariance
+    Y  : Tensor, shape (T, ny)
+        Observation sequence.
+    F  : Tensor, shape (nx, nx)
+        State-transition matrix.
+    H  : Tensor, shape (ny, nx)
+        Observation matrix.
+    Q  : Tensor, shape (nx, nx)
+        Process-noise covariance.
+    R  : Tensor, shape (ny, ny)
+        Measurement-noise covariance.
+    m0 : Tensor, shape (nx,)
+        Initial state mean.
+    P0 : Tensor, shape (nx, nx)
+        Initial state covariance.
 
     Returns
     -------
-    Tensor scalar  log p(y_{1:T})
+    Tensor
+        Scalar log p(y_{1:T}).
     """
     T    = tf.shape(Y)[0]
     ny   = tf.shape(Y)[1]
@@ -183,7 +227,36 @@ def kalman_filter_tf(
     Y: Tensor, F: Tensor, H: Tensor, Q: Tensor, R: Tensor,
     m0: Tensor, P0: Tensor,
 ) -> KFResultsTF:
-    """Full Kalman forward pass; returns KFResultsTF with all arrays."""
+    """Full Kalman forward pass returning all intermediate arrays.
+
+    Runs the same recursion as ``lgssm_log_likelihood`` but stores all
+    predicted and filtered means/covariances, gains, innovations, and
+    innovation covariances.
+
+    Parameters
+    ----------
+    Y  : Tensor, shape (T, ny)
+        Observation sequence.
+    F  : Tensor, shape (nx, nx)
+        State-transition matrix.
+    H  : Tensor, shape (ny, nx)
+        Observation matrix.
+    Q  : Tensor, shape (nx, nx)
+        Process-noise covariance.
+    R  : Tensor, shape (ny, ny)
+        Measurement-noise covariance.
+    m0 : Tensor, shape (nx,)
+        Initial state mean.
+    P0 : Tensor, shape (nx, nx)
+        Initial state covariance.
+
+    Returns
+    -------
+    KFResultsTF
+        Named tuple with fields ``x_pred``, ``P_pred``, ``x_filt``,
+        ``P_filt``, ``K``, ``innov``, ``S``, ``loglik`` — all
+        ``tf.Tensor`` values.
+    """
     T    = tf.shape(Y)[0]
     ny   = tf.shape(Y)[1]
     ny_f = tf.cast(ny, F32)
@@ -255,19 +328,34 @@ class EKFStateTF:
 
 
 class EKFTrackerTF:
-    """Step-by-step EKF in TensorFlow.
+    """Step-by-step Extended Kalman Filter implemented in TensorFlow.
 
-    Compatible with EDHFlowPF_TF / LEDHFlowPF_TF as a GaussianTracker.
+    Compatible with the ``GaussianTracker`` protocol used by
+    ``EDHFlowPF_TF`` and ``LEDHFlowPF_TF``.
 
     Parameters
     ----------
-    g          : x, u -> x_next  (tf.Tensor -> tf.Tensor)
-    h          : x -> z           (tf.Tensor -> tf.Tensor)
-    Q, R       : process / measurement noise covariances  (numpy or Tensor)
-    jac_g      : optional analytic Jacobian of g w.r.t. x (uses tf.GradientTape if None)
-    jac_h      : optional analytic Jacobian of h w.r.t. x (uses tf.GradientTape if None)
-    joseph     : use Joseph-form covariance update
-    jitter     : diagonal stabilisation for S
+    g : callable
+        State-transition function ``(x, u) -> x_next`` where both arguments
+        are ``tf.Tensor`` objects.
+    h : callable
+        Observation function ``x -> z`` (``tf.Tensor -> tf.Tensor``).
+    Q : ndarray or Tensor, shape (nx, nx)
+        Process-noise covariance.
+    R : ndarray or Tensor, shape (nz, nz)
+        Measurement-noise covariance.
+    jac_g : callable, optional
+        Analytic Jacobian of ``g`` w.r.t. ``x``.  If ``None``, computed
+        automatically via ``tf.GradientTape``.
+    jac_h : callable, optional
+        Analytic Jacobian of ``h`` w.r.t. ``x``.  If ``None``, computed
+        automatically via ``tf.GradientTape``.
+    joseph : bool, optional
+        Use the Joseph-form covariance update for numerical stability.
+        Default is ``True``.
+    jitter : float, optional
+        Small diagonal added to the innovation covariance ``S`` before
+        inversion.  Default is ``1e-6``.
     """
 
     def __init__(
@@ -301,7 +389,15 @@ class EKFTrackerTF:
     # ---- GaussianTracker protocol ----
 
     def predict(self) -> Tuple[np.ndarray, np.ndarray]:
-        """Predict step; returns (m_pred, P_pred) as numpy arrays."""
+        """Predict step.
+
+        Returns
+        -------
+        m_pred : ndarray, shape (nx,)
+            Predicted state mean.
+        P_pred : ndarray, shape (nx, nx)
+            Predicted state covariance.
+        """
         assert self._state is not None, "Call init() first."
         self._past_mean = self._state.mean.numpy()
         m, P = self._state.mean, self._state.cov
@@ -318,7 +414,20 @@ class EKFTrackerTF:
         return m_pred.numpy(), P_pred.numpy()
 
     def update(self, z_k: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """Measurement update; returns (m_post, P_post) as numpy arrays."""
+        """Measurement update step.
+
+        Parameters
+        ----------
+        z_k : ndarray, shape (nz,)
+            Observed measurement vector.
+
+        Returns
+        -------
+        m_post : ndarray, shape (nx,)
+            Posterior state mean.
+        P_post : ndarray, shape (nx, nx)
+            Posterior state covariance.
+        """
         assert self._state is not None
         m, P = self._state.mean, self._state.cov
         z    = _to_f32(z_k)
@@ -350,6 +459,13 @@ class EKFTrackerTF:
         return m_post.numpy(), P_post.numpy()
 
     def get_past_mean(self) -> np.ndarray:
+        """Return the state mean from before the most recent predict call.
+
+        Returns
+        -------
+        ndarray, shape (nx,)
+            Prior state mean ``m_{t-1|t-1}``.
+        """
         return self._past_mean
 
 
@@ -362,16 +478,31 @@ class UKFStateTF:
 
 
 class UKFTrackerTF:
-    """Step-by-step UKF in TensorFlow.
+    """Step-by-step Unscented Kalman Filter implemented in TensorFlow.
 
-    Compatible with EDHFlowPF_TF / LEDHFlowPF_TF as a GaussianTracker.
+    Compatible with the ``GaussianTracker`` protocol used by
+    ``EDHFlowPF_TF`` and ``LEDHFlowPF_TF``.
 
     Parameters
     ----------
-    g, h       : process and measurement functions (Tensor -> Tensor)
-    Q, R       : noise covariances
-    alpha, beta, kappa : sigma-point spread parameters
-    jitter     : diagonal stabilisation for Cholesky
+    g : callable
+        State-transition function ``(x, u) -> x_next`` (``tf.Tensor``).
+    h : callable
+        Observation function ``x -> z`` (``tf.Tensor -> tf.Tensor``).
+    Q : ndarray or Tensor, shape (nx, nx)
+        Process-noise covariance.
+    R : ndarray or Tensor, shape (nz, nz)
+        Measurement-noise covariance.
+    alpha : float, optional
+        Sigma-point spread parameter.  Default is ``1e-3``.
+    beta : float, optional
+        Distribution parameter (``2`` is optimal for Gaussians).
+        Default is ``2.0``.
+    kappa : float, optional
+        Secondary scaling parameter.  Default is ``0.0``.
+    jitter : float, optional
+        Small diagonal added to covariance before Cholesky decomposition.
+        Default is ``1e-6``.
     """
 
     def __init__(
@@ -415,7 +546,22 @@ class UKFTrackerTF:
         return _to_f32(Wm), _to_f32(Wc), scale
 
     def _sigma_points(self, m: Tensor, P: Tensor, scale: float) -> Tensor:
-        """Return (2nx+1, nx) sigma points."""
+        """Compute the ``(2nx+1, nx)`` sigma-point matrix.
+
+        Parameters
+        ----------
+        m : Tensor, shape (nx,)
+            Current state mean.
+        P : Tensor, shape (nx, nx)
+            Current state covariance.
+        scale : float
+            Sigma-point scale ``sqrt(nx + λ)``.
+
+        Returns
+        -------
+        Tensor, shape (2 nx + 1, nx)
+            Sigma points.
+        """
         nx = tf.shape(m)[0]
         L  = tf.linalg.cholesky(P + self.jitter * tf.eye(nx, dtype=F32))
         cols = tf.unstack(scale * L, axis=1)          # nx vectors of length nx
@@ -425,6 +571,15 @@ class UKFTrackerTF:
     # ---- GaussianTracker protocol ----
 
     def predict(self) -> Tuple[np.ndarray, np.ndarray]:
+        """Predict step using unscented transform.
+
+        Returns
+        -------
+        m_pred : ndarray, shape (nx,)
+            Predicted state mean.
+        P_pred : ndarray, shape (nx, nx)
+            Predicted state covariance.
+        """
         assert self._state is not None, "Call init() first."
         self._past_mean = self._state.mean.numpy()
         m, P = self._state.mean, self._state.cov
@@ -444,6 +599,20 @@ class UKFTrackerTF:
         return m_pred.numpy(), P_pred.numpy()
 
     def update(self, z_k: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """Measurement update step using unscented transform.
+
+        Parameters
+        ----------
+        z_k : ndarray, shape (nz,)
+            Observed measurement vector.
+
+        Returns
+        -------
+        m_post : ndarray, shape (nx,)
+            Posterior state mean.
+        P_post : ndarray, shape (nx, nx)
+            Posterior state covariance.
+        """
         assert self._state is not None
         m, P = self._state.mean, self._state.cov
         z    = _to_f32(z_k)
@@ -471,12 +640,37 @@ class UKFTrackerTF:
         return m_post.numpy(), P_post.numpy()
 
     def get_past_mean(self) -> np.ndarray:
+        """Return the state mean from before the most recent predict call.
+
+        Returns
+        -------
+        ndarray, shape (nx,)
+            Prior state mean ``m_{t-1|t-1}``.
+        """
         return self._past_mean
 
 
 # Automatic Jacobian via tf.GradientTape
 def _jacobian_tape(fn: Callable, x: Tensor) -> Tensor:
-    """Compute J = ∂fn(x)/∂x using forward-mode or reverse-mode tape."""
+    """Compute the Jacobian ``∂fn(x)/∂x`` using ``tf.GradientTape``.
+
+    Parameters
+    ----------
+    fn : callable
+        Differentiable function ``x -> y`` (``tf.Tensor -> tf.Tensor``).
+    x : Tensor, shape (n,)
+        Point at which to evaluate the Jacobian.
+
+    Returns
+    -------
+    Tensor, shape (m, n)
+        Jacobian matrix ``J[i, j] = ∂fn(x)_i / ∂x_j``.
+
+    Raises
+    ------
+    RuntimeError
+        If the Jacobian is ``None`` (i.e. ``fn`` is not differentiable).
+    """
     x = tf.cast(x, F32)
     with tf.GradientTape() as tape:
         tape.watch(x)

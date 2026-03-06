@@ -1,5 +1,22 @@
 """
-Differentiable Particle Filter with OT-based Resampling
+Differentiable Particle Filter with Optimal Transport (OT) resampling.
+
+Implements a differentiable particle filter that replaces the standard
+multinomial/systematic resampling step with entropy-regularised optimal
+transport via the Sinkhorn algorithm.  Barycentric projection is used to
+map the transport plan back to a new particle set, preserving
+differentiability through the resampling step.
+
+Functions
+---------
+pairwise_squared_distances – Batched squared-distance matrix.
+tau_epsilon                 – Dual Sinkhorn c-transform operator.
+sinkhorn_ot_resample        – Entropy-regularised OT resampling step.
+
+Classes
+-------
+DPF_OT – Full differentiable particle filter with OT resampling
+         (``tf.Module`` subclass).
 """
 
 import tensorflow as tf
@@ -556,17 +573,18 @@ class DPF_OT(tf.Module):
         return particles_seq, weights_seq
     
     def _aggregate_diagnostics(self, diagnostics_list):
-        """Aggregate per-timestep diagnostics into summary statistics.
+        """Aggregate per-timestep diagnostic dicts into summary statistics.
 
         Parameters
         ----------
-        diagnostics_list : list
-            List of diagnostic dictionaries from each timestep.
+        diagnostics_list : list of dict
+            One dict per timestep as returned by ``step(..., return_diagnostics=True)``.
 
         Returns
         -------
         dict
-            Aggregated statistics with mean, std, min, and max values.
+            Scalar summaries with suffixes ``_mean``, ``_std``, ``_min``, ``_max``;
+            boolean entries get a ``_rate`` suffix.
         """
         if not diagnostics_list:
             return {}
@@ -601,21 +619,21 @@ class DPF_OT(tf.Module):
         return aggregated
     
     def _compute_rmse_sequence(self, particles_seq, weights_seq, ground_truth):
-        """Compute RMSE at each timestep between weighted particle mean and ground truth.
+        """Compute per-timestep RMSE between the weighted particle mean and ground truth.
 
         Parameters
         ----------
-        particles_seq: list 
-            List of particle tensors of shape [N, d].
-        weights_seq: list
-            List of weight tensors of shape [N].
-        ground_truth: Tensor
-            True state sequence of shape [T+1, d] (includes t=0).
+        particles_seq : list of Tensor
+            Particle tensors of shape ``[N, d]``, one per timestep.
+        weights_seq : list of Tensor
+            Weight tensors of shape ``[N]``, one per timestep.
+        ground_truth : Tensor, shape (T+1, d)
+            True state sequence (includes ``t = 0``).
 
         Returns
-        ----------
-        Tensor
-            RMSE at each timestep, shape [T].
+        -------
+        Tensor, shape (T,)
+            Per-timestep RMSE.
         """
         rmse_list = []
         

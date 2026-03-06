@@ -1,5 +1,29 @@
 """"
-EKF/UKF-assisted EDH Particle-Flow Particle Filter (EDH-PF) implementation.
+EKF/UKF-assisted EDH Particle-Flow Particle Filter (EDH-PF).
+
+Implements the Exact Daum–Huang (EDH) particle-flow particle filter
+linearised via an auxiliary EKF or UKF.  The flow migrates each particle
+from the prior to the posterior by integrating an affine drift field in
+pseudo-time λ ∈ [0, 1].
+
+Classes
+-------
+GaussianTracker  – Protocol for any EKF/UKF that supplies (mean, cov) at
+                   each step.
+EKFTracker       – :class:`~extended_kalman_filter.ExtendedKalmanFilter`
+                   wrapper implementing GaussianTracker.
+UKFTracker       – :class:`~unscented_kalman_filter.UnscentedKalmanFilter`
+                   wrapper implementing GaussianTracker.
+EDHConfig        – Hyper-parameters for the EDH-PF.
+PFState          – Particle-filter state container (alias of
+                   :class:`~base_ssm.ParticleFilterState`).
+EDHFlowPF        – Main EDH particle-flow filter class.
+
+Shared utilities from :mod:`base_ssm`
+--------------------------------------
+:func:`~base_ssm.systematic_resample`,
+:func:`~base_ssm.effective_sample_size`, and
+:func:`~base_ssm.weighted_mean_cov` replace private reimplementations.
 """
 from __future__ import annotations
 
@@ -7,133 +31,311 @@ from dataclasses import dataclass
 from typing import Callable, Optional, Protocol, Tuple, Union
 import numpy as np
 
+try:
+    from models.base_ssm import (
+        ParticleFilterState,
+        systematic_resample as _systematic_resample,
+        effective_sample_size as _ess,
+        weighted_mean_cov,
+    )
+except ModuleNotFoundError:
+    from base_ssm import (
+        ParticleFilterState,
+        systematic_resample as _systematic_resample,
+        effective_sample_size as _ess,
+        weighted_mean_cov,
+    )
+
 Array = np.ndarray
 
 class GaussianTracker(Protocol):
-    """Auxiliary EKF/UKF that supplies (m, P) and carries them forward."""
-    def predict(self) -> Tuple[Array, Array]:
-        """Return (m_{k|k-1}, P_{k|k-1}) for current step and update internal clock."""
-    def update(self, z_k: Array) -> Tuple[Array, Array]:
-        """Measurement update; return (m_{k|k}, P_{k|k})."""
-    def get_past_mean(self) -> Array:
-        """Return \hat{x}_{k-1|k-1} (used to form \bar\eta_0 = g_k(\hat{x}_{k-1}, 0))."""
+    """Protocol for auxiliary EKF/UKF trackers.
 
-GFn = Callable[[Array, Optional[Array], Optional[Array]], Array]  # x->g(x,u,v)
-HFn = Callable[[Array], Array]                                    # x->h(x)
-JacobianHFn = Callable[[Array], Array]                            # x->\partial h/\partial x
-LogTransPdf = Callable[[Array, Array], float]                     # log p(x_k|x_{k-1})
-LogLikePdf  = Callable[[Array, Array], float]                     # log p(z_k|x_k)
+    Any object that supplies predicted and updated Gaussian moments
+    (mean, covariance) at each time step satisfies this protocol.
+    Concrete implementations are :class:`EKFTracker` and :class:`UKFTracker`.
+    """
+
+    def predict(self) -> Tuple[Array, Array]:
+        """Advance the tracker one step and return the predicted moments.
+
+        Returns
+        -------
+        m_pred : ndarray, shape (nx,)
+            Predicted state mean x_{k|k-1}.
+        P_pred : ndarray, shape (nx, nx)
+            Predicted state covariance P_{k|k-1}.
+        """
+
+    def update(self, z_k: Array) -> Tuple[Array, Array]:
+        """Incorporate an observation and return the posterior moments.
+
+        Parameters
+        ----------
+        z_k : ndarray, shape (nz,)
+            Observation at time k.
+
+        Returns
+        -------
+        m_post : ndarray, shape (nx,)
+            Posterior state mean x_{k|k}.
+        P_post : ndarray, shape (nx, nx)
+            Posterior state covariance P_{k|k}.
+        """
+
+    def get_past_mean(self) -> Array:
+        """Return the posterior mean from the previous time step.
+
+        Returns
+        -------
+        ndarray, shape (nx,)
+            x_{k-1|k-1}, used to initialise the mean trajectory η̄_0.
+        """
+
+GFn = Callable[[Array, Optional[Array], Optional[Array]], Array]  # g(x, u, v)
+HFn = Callable[[Array], Array]                                    # h(x)
+JacobianHFn = Callable[[Array], Array]                            # ∂h/∂x
+LogTransPdf = Callable[[Array, Array], float]                     # log p(x_k | x_{k-1})
+LogLikePdf  = Callable[[Array, Array], float]                     # log p(z_k | x_k)
 
 
 # Utilities
 def rk4_step(x: Array, f: Callable[[Array], Array], dt: float) -> Array:
-    """One RK4 step for x' = f(x)."""
+    """Perform one RK4 integration step for the ODE x' = f(x).
+
+    Parameters
+    ----------
+    x : ndarray, shape (n,)
+        Current state.
+    f : callable
+        Vector field f(x) → (n,).
+    dt : float
+        Step size.
+
+    Returns
+    -------
+    ndarray, shape (n,)
+        State after one RK4 step of size ``dt``.
+    """
     k1 = f(x)
     k2 = f(x + 0.5 * dt * k1)
     k3 = f(x + 0.5 * dt * k2)
     k4 = f(x + dt * k3)
     return x + (dt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
 
+
 def systematic_resample(weights: Array, rng: np.random.Generator) -> Array:
-    """Systematic resampling; returns ancestor indices."""
-    n = weights.size
-    w = weights / np.sum(weights)
-    positions = (rng.random() + np.arange(n)) / n
-    cdf = np.cumsum(w)
-    idx = np.zeros(n, dtype=int)
-    i = j = 0
-    while i < n:
-        if positions[i] < cdf[j]:
-            idx[i] = j; i += 1
-        else:
-            j += 1
-    return idx
+    """Systematic resampling; returns ancestor indices.
+
+    Delegates to :func:`~base_ssm.systematic_resample`.
+
+    Parameters
+    ----------
+    weights : ndarray, shape (N,)
+        Normalized particle weights.
+    rng : np.random.Generator
+        NumPy random generator.
+
+    Returns
+    -------
+    ndarray of int, shape (N,)
+        Resampled ancestor indices.
+    """
+    return _systematic_resample(weights, rng)
+
 
 def effective_sample_size(weights: Array) -> float:
-    """ESS = 1 / sum_i w_i^2 (with normalized weights)."""
-    w = weights / np.sum(weights)
-    return 1.0 / float(np.sum(w * w))
+    """Compute ESS = 1 / Σ w_i^2 from normalized weights.
 
-# Config/State 
+    Delegates to :func:`~base_ssm.effective_sample_size`.
+
+    Parameters
+    ----------
+    weights : ndarray, shape (N,)
+        Normalized particle weights.
+
+    Returns
+    -------
+    float
+        Effective sample size.
+    """
+    return _ess(weights)
+
+# Config/State
 @dataclass
 class EDHConfig:
-    """Configuration for EKF/UKF-assisted EDH-PF."""
+    """Hyper-parameters for the EKF/UKF-assisted EDH particle-flow PF.
+
+    Parameters
+    ----------
+    n_particles : int, optional
+        Number of particles. Default is 512.
+    n_lambda_steps : int, optional
+        Number of pseudo-time sub-steps for λ ∈ [0, 1]. Default is 8.
+    resample_ess_ratio : float, optional
+        Resample when ESS < ratio * n_particles. Default is 0.5.
+        Set to 0 to disable resampling.
+    flow_integrator : str, optional
+        ODE integrator for the particle flow: ``'rk4'`` (default) or
+        ``'euler'``.
+    rng : np.random.Generator, optional
+        NumPy random generator for resampling. Default is
+        ``np.random.default_rng(0)``.
+    """
+
     n_particles: int = 512
-    n_lambda_steps: int = 8                  # substeps for lambda in [0,1]
-    resample_ess_ratio: float = 0.5          # resample when ESS < ratio * N
-    flow_integrator: str = "rk4"             # "rk4" or "euler"
+    n_lambda_steps: int = 8
+    resample_ess_ratio: float = 0.5
+    flow_integrator: str = "rk4"
     rng: np.random.Generator = np.random.default_rng(0)
 
-@dataclass
-class PFState:
-    """Particle filter state container."""
-    particles: Array                         # (N, nx)
-    weights: Array                           # (N,)
-    mean: Array                              # (nx,)
-    cov: Array                               # (nx, nx)
-    diagnostics: dict = None                 # optional flow diagnostics (e.g., condition numbers)
 
-# Tracker Wrappers 
+# Keep PFState as alias for backward compatibility
+PFState = ParticleFilterState
+
+# Tracker Wrappers
 class EKFTracker:
-    """Wrapper for ExtendedKalmanFilter to match GaussianTracker protocol."""
-    
+    """Wrapper adapting :class:`~extended_kalman_filter.ExtendedKalmanFilter`
+    to the :class:`GaussianTracker` protocol.
+
+    Parameters
+    ----------
+    ekf : ExtendedKalmanFilter
+        Configured EKF instance.
+    initial_state : EKFState
+        Initial EKF state (mean, cov, t=0).
+    """
+
     def __init__(self, ekf, initial_state):
-        """
-        Args:
-            ekf: ExtendedKalmanFilter instance
-            initial_state: EKFState with initial mean, cov, t
-        """
         self.ekf = ekf
         self.state = initial_state
         self.past_mean = initial_state.mean.copy()
-        
+
     def predict(self) -> Tuple[Array, Array]:
-        """Run prediction and return (m_{k|k-1}, P_{k|k-1})."""
+        """Run EKF prediction and return (m_{k|k-1}, P_{k|k-1}).
+
+        Returns
+        -------
+        m_pred : ndarray, shape (nx,)
+        P_pred : ndarray, shape (nx, nx)
+        """
         self.past_mean = self.state.mean.copy()
         self.state = self.ekf.predict(self.state, u=None)
         return self.state.mean, self.state.cov
-    
+
     def update(self, z_k: Array) -> Tuple[Array, Array]:
-        """Run measurement update and return (m_{k|k}, P_{k|k})."""
+        """Run EKF measurement update and return (m_{k|k}, P_{k|k}).
+
+        Parameters
+        ----------
+        z_k : ndarray, shape (nz,)
+            Observation at time k.
+
+        Returns
+        -------
+        m_post : ndarray, shape (nx,)
+        P_post : ndarray, shape (nx, nx)
+        """
         self.state = self.ekf.update(self.state, z_k)
         return self.state.mean, self.state.cov
-    
+
     def get_past_mean(self) -> Array:
-        """Return \hat{x}_{k-1|k-1}."""
+        """Return x_{k-1|k-1} (posterior mean from the previous step).
+
+        Returns
+        -------
+        ndarray, shape (nx,)
+        """
         return self.past_mean
 
 
 class UKFTracker:
-    """Wrapper for UnscentedKalmanFilter to match GaussianTracker protocol."""
-    
+    """Wrapper adapting :class:`~unscented_kalman_filter.UnscentedKalmanFilter`
+    to the :class:`GaussianTracker` protocol.
+
+    Parameters
+    ----------
+    ukf : UnscentedKalmanFilter
+        Configured UKF instance.
+    initial_state : UKFState
+        Initial UKF state (mean, cov, t=0).
+    """
+
     def __init__(self, ukf, initial_state):
-        """
-        Args:
-            ukf: UnscentedKalmanFilter instance
-            initial_state: UKFState with initial mean, cov, t
-        """
         self.ukf = ukf
         self.state = initial_state
         self.past_mean = initial_state.mean.copy()
-        
+
     def predict(self) -> Tuple[Array, Array]:
-        """Run prediction and return (m_{k|k-1}, P_{k|k-1})."""
+        """Run UKF prediction and return (m_{k|k-1}, P_{k|k-1}).
+
+        Returns
+        -------
+        m_pred : ndarray, shape (nx,)
+        P_pred : ndarray, shape (nx, nx)
+        """
         self.past_mean = self.state.mean.copy()
         self.state = self.ukf.predict(self.state, u=None)
         return self.state.mean, self.state.cov
-    
+
     def update(self, z_k: Array) -> Tuple[Array, Array]:
-        """Run measurement update and return (m_{k|k}, P_{k|k})."""
+        """Run UKF measurement update and return (m_{k|k}, P_{k|k}).
+
+        Parameters
+        ----------
+        z_k : ndarray, shape (nz,)
+            Observation at time k.
+
+        Returns
+        -------
+        m_post : ndarray, shape (nx,)
+        P_post : ndarray, shape (nx, nx)
+        """
         self.state = self.ukf.update(self.state, z_k)
         return self.state.mean, self.state.cov
-    
+
     def get_past_mean(self) -> Array:
+        """Return x_{k-1|k-1} (posterior mean from the previous step).
+
+        Returns
+        -------
+        ndarray, shape (nx,)
+        """
         """Return \hat{x}_{k-1|k-1}."""
         return self.past_mean
 
-# EDH Flow PF 
+# EDH Flow PF
 class EDHFlowPF:
-    """EKF/UKF-assisted EDH particle-flow particle filter."""
+    """EKF/UKF-assisted EDH particle-flow particle filter.
+
+    Implements the Exact Daum–Huang (EDH) flow filter, which migrates N
+    particles from the prior to the posterior by integrating an affine
+    drift field (parameterised by a linearised observation model) in
+    pseudo-time λ ∈ [0, 1].  An auxiliary EKF or UKF (the *tracker*)
+    supplies the global Gaussian moments used to construct the flow.
+
+    Parameters
+    ----------
+    tracker : GaussianTracker
+        EKF/UKF that provides (m_{k|k-1}, P) and is updated to
+        (m_{k|k}, P_k) each step.  Use :class:`EKFTracker` or
+        :class:`UKFTracker`.
+    g : callable
+        Process function g(x, u, v) → (nx,), where v is a noise sample.
+    h : callable
+        Observation function h(x) → (nz,).
+    jacobian_h : callable
+        Jacobian of h: ∂h/∂x evaluated at x → (nz, nx).
+    log_trans_pdf : callable
+        Log transition density log p(x_k | x_{k-1}) → float.
+    log_like_pdf : callable
+        Log likelihood log p(z_k | x_k) → float.
+    R : ndarray, shape (nz, nz)
+        Observation-noise covariance used in the flow ODE.
+    config : EDHConfig, optional
+        Algorithm hyper-parameters. Default constructs an :class:`EDHConfig`
+        with default values.
+    """
 
     def __init__(
         self,
@@ -171,12 +373,25 @@ class EDHFlowPF:
 
     # API
     def init_from_gaussian(self, mean0: Array, cov0: Array) -> PFState:
-        """Sample initial particles from N(mean0, cov0) with equal weights."""
+        """Initialise particles from N(mean0, cov0) with uniform weights.
+
+        Parameters
+        ----------
+        mean0 : ndarray, shape (nx,)
+            Initial state mean.
+        cov0 : ndarray, shape (nx, nx)
+            Initial state covariance.
+
+        Returns
+        -------
+        PFState
+            Initial particle-filter state.
+        """
         n, nx = self.cfg.n_particles, mean0.size
         eps = self.cfg.rng.multivariate_normal(np.zeros(nx), cov0, size=n)
         particles = mean0[None, :] + eps
         weights = np.full(n, 1.0 / n)
-        mean, cov = self._weighted_stats(particles, weights)
+        mean, cov = weighted_mean_cov(particles, weights)
         return PFState(particles=particles, weights=weights, mean=mean, cov=cov, diagnostics={})
 
     def step(
@@ -186,8 +401,25 @@ class EDHFlowPF:
         u_km1: Optional[Array] = None,
         process_noise_sampler: Optional[Callable[[int, int], Array]] = None,
     ) -> PFState:
-        """
-        Run one EDH-PF step.
+        """Run one EDH-PF step (propagate + flow + weight update).
+
+        Parameters
+        ----------
+        state : PFState
+            Particle-filter state from the previous time step.
+        z_k : ndarray, shape (nz,)
+            Observation at time k.
+        u_km1 : ndarray, optional
+            Control input u_{k-1}.  ``None`` if no input.
+        process_noise_sampler : callable, optional
+            ``process_noise_sampler(N, nx) → (N, nx)`` that draws process
+            noise samples for the propagation step.  If ``None``, zero noise
+            is used (i.e. purely deterministic propagation).
+
+        Returns
+        -------
+        PFState
+            Updated particle-filter state at time k.
         """
         N, nx = state.particles.shape
 
@@ -309,21 +541,31 @@ class EDHFlowPF:
                 w = np.full_like(w, 1.0 / N)
 
         # Estimate mean and covariance
-        mean, cov = self._weighted_stats(xk, w)
-        
+        mean, cov = weighted_mean_cov(xk, w)
+
         # Package diagnostics
         diagnostics = {'condition_numbers': cond_numbers}
-        
+
         return PFState(particles=xk, weights=w, mean=mean, cov=cov, diagnostics=diagnostics)
 
-    # helpers 
+    # helpers
     @staticmethod
     def _weighted_stats(x: Array, w: Array) -> Tuple[Array, Array]:
-        """Weighted mean/covariance with symmetry enforcement."""
-        w = w / np.sum(w)
-        mean = np.sum(x * w[:, None], axis=0)
-        xc = x - mean[None, :]
-        cov = (xc.T * w) @ xc
-        cov = 0.5 * (cov + cov.T)
-        return mean, cov
+        """Compute weighted mean and covariance.
+
+        Delegates to :func:`~base_ssm.weighted_mean_cov`.
+
+        Parameters
+        ----------
+        x : ndarray, shape (N, nx)
+            Particle states.
+        w : ndarray, shape (N,)
+            Particle weights (need not sum to 1).
+
+        Returns
+        -------
+        mean : ndarray, shape (nx,)
+        cov : ndarray, shape (nx, nx)
+        """
+        return weighted_mean_cov(x, w)
 
